@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 
 '''
-
-
-
+    Download a dataset, split it, create a tf.data.Dataset to load it and preprocess it efficiently, then build 
+    and train a binary classification model containing an Embedding Layer
 '''
+
 import tensorflow as tf  
 import os 
-import numpy as np
-import sys 
-# from tensorflow.train import BytesList, FloatList, Int64List, Feature, Features, Example
 import requests
 import tarfile
 import re
+import tensorflow_datasets as tfds 
 
 IMDB_DATASET_URL = 'https://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz'
 WORKING_DIR = os.path.join(os.getcwd(), 'movie_review_dataset')
@@ -20,6 +18,8 @@ DEBUG_MODE = True
 USER_REVIEW_MAX_LENGTH = 1000
 N_TRAIN = 25000
 BATCH_SIZE = 32 
+USE_TFDS = True
+EMBEDDING_DIM = 30
 
 def download_dataset(url, name):
     ''' 
@@ -37,65 +37,92 @@ def extract_gzip(file_path, extract_path):
     except tarfile.TarError as e:
         print('tar.gz file extraction error')
 
-def preprocess_pipeline( ds:tf.data.Dataset, string_tokenizer_func, embedding_func, batch_size, n_threads):
+def preprocess_pipeline( ds:tf.data.Dataset, string_tokenizer_func, embedding_func, batch_size, n_threads=5):
     ds = ds.map(lambda review, score: (string_tokenizer_func(review) , score), num_parallel_calls=n_threads)
     ds = ds.map(lambda tokens, score: ( tf.multiply( tf.reduce_mean(embedding_func(tokens), axis=0) , tf.sqrt( tf.cast(len(tokens), tf.float32)) ) , score), num_parallel_calls=n_threads)
     return ds.batch(batch_size).prefetch(1)
 
-def preprocess_reviews(imdb_path, n_threads = 5):
-    n_train = N_TRAIN
-    shuffle_buffer = 250
-    n_batch =  BATCH_SIZE
-    text_vectorizer = tf.keras.layers.TextVectorization()
-
-    train_path = os.path.join(imdb_path, 'train')
-    test_path = os.path.join(imdb_path, 'test')
-
-    train_pos_path = os.path.join(train_path,'pos')
-    train_neg_path = os.path.join(train_path,'neg')
-    test_pos_path = os.path.join(test_path,'pos')
-    test_neg_path = os.path.join(test_path,'neg')
+def get_datasets(imdb_path, use_tfds):
+    text_vectorizer = tf.keras.layers.TextVectorization
+    embedding_layer = tf.keras.layers.Embedding
+    n_validation = n_batch =  BATCH_SIZE
+    shuffle_buffer = BATCH_SIZE
     
-    train_pos_files = list(map(lambda filename: os.path.join(train_pos_path, filename) ,os.listdir(train_pos_path)))  
-    train_neg_files = list(map(lambda filename: os.path.join(train_neg_path, filename) ,os.listdir(train_neg_path )))
-    test_pos_files =  list(map(lambda filename: os.path.join(test_pos_path, filename)   ,os.listdir(test_pos_path) ))
-    test_neg_files =  list(map(lambda filename: os.path.join(test_neg_path, filename)   ,os.listdir(test_neg_path) ))
-
     if DEBUG_MODE:
         n_batch = 1
         n_train = 2000
         n_train_over_2 = n_train // 2
-        shuffle_buffer = 2000
-        train_pos_files = train_pos_files[:n_train_over_2]
-        train_neg_files = train_neg_files[:n_train_over_2]
-        test_pos_files = test_pos_files[:n_train_over_2]
-        test_neg_files = test_neg_files[:n_train_over_2]
-    
-    n_validation_set = int(n_train * 0.6)
+
+    n_validation = int(n_train * 0.6)
     n_test_set = int(n_train * 0.4)
 
-    dataset_train_pos = tf.data.TextLineDataset(train_pos_files)
-    dataset_train_neg = tf.data.TextLineDataset(train_neg_files)
-    dataset_train_full = dataset_train_pos.concatenate(dataset_train_neg)
-    text_vectorizer.adapt(dataset_train_full)
-    embedding_layer = tf.keras.layers.Embedding( output_dim = 2, input_dim=len(text_vectorizer.get_vocabulary()) + 2)
+    if use_tfds:
+        text_vectorizer = text_vectorizer()
+        ds = tfds.load(name="imdb_reviews")
+        
+        imdb_train_ds = ds['train'].take(n_train).cache()
+        imdb_test_ds = ds['test'].take(n_train).cache()
+        
+        text_vectorizer.adapt(imdb_train_ds.map(lambda dict_: dict_['text']))
+        
+        train_ds = imdb_train_ds.map(lambda dict_: (dict_['text'],dict_['label'] ))
+        test_ds  = imdb_test_ds.map(lambda dict_: (dict_['text'],dict_['label'] ))
+        
+        validation_ds = test_ds.take(n_validation).cache()
+        test_ds = test_ds.skip(n_validation).cache()
 
-    dataset_train_pos_u = dataset_train_pos.map(lambda x: [x,0], num_parallel_calls=n_threads)
-    dataset_train_neg_u = dataset_train_neg.map(lambda x: [x,1], num_parallel_calls=n_threads)
-    dataset_train_full_u = dataset_train_pos_u.concatenate(dataset_train_neg_u).shuffle(shuffle_buffer)
+        embedding_layer = embedding_layer( output_dim = EMBEDDING_DIM, input_dim=len(text_vectorizer.get_vocabulary()) + 2)
+    else:
+        n_train = N_TRAIN
+        text_vectorizer = text_vectorizer()
+        n_threads = 5
 
-    dataset_test_pos_u = tf.data.TextLineDataset(test_pos_files).map(lambda x: [x,0], num_parallel_calls=n_threads)
-    dataset_test_neg_u = tf.data.TextLineDataset(test_neg_files).map(lambda x: [x,1], num_parallel_calls=n_threads)
-    dataset_test_full_u = dataset_test_pos_u.concatenate(dataset_test_neg_u)
+        train_path = os.path.join(imdb_path, 'train')
+        test_path = os.path.join(imdb_path, 'test')
+
+        train_pos_path = os.path.join(train_path,'pos')
+        train_neg_path = os.path.join(train_path,'neg')
+        test_pos_path = os.path.join(test_path,'pos')
+        test_neg_path = os.path.join(test_path,'neg')
+        
+        train_pos_files = list(map(lambda filename: os.path.join(train_pos_path, filename) ,os.listdir(train_pos_path)))  
+        train_neg_files = list(map(lambda filename: os.path.join(train_neg_path, filename) ,os.listdir(train_neg_path )))
+        test_pos_files = list(map(lambda filename: os.path.join(test_pos_path, filename) ,os.listdir(test_pos_path) ))
+        test_neg_files = list(map(lambda filename: os.path.join(test_neg_path, filename) ,os.listdir(test_neg_path) ))
+        
+        dataset_train_pos = tf.data.TextLineDataset(train_pos_files)
+        dataset_train_neg = tf.data.TextLineDataset(train_neg_files)
+        dataset_test_pos = tf.data.TextLineDataset(test_pos_files)
+        dataset_test_neg = tf.data.TextLineDataset(test_neg_files)
+
+        dataset_train_pos = dataset_train_pos.take(n_train_over_2)    
+        dataset_train_neg = dataset_train_neg.take(n_train_over_2)    
+        dataset_test_pos = dataset_test_pos.take(n_train_over_2)     
+        dataset_test_neg = dataset_test_neg.take(n_train_over_2)     
     
-    dataset_validation_u = dataset_test_full_u.take(n_validation_set).shuffle(shuffle_buffer)
-    dataset_test_u = dataset_test_full_u.skip(n_validation_set).shuffle(shuffle_buffer)
-    
-    dataset_train_full_u = preprocess_pipeline(dataset_train_full_u, text_vectorizer, embedding_layer, n_batch, n_threads) 
-    dataset_validation_u = preprocess_pipeline(dataset_validation_u, text_vectorizer, embedding_layer, n_batch, n_threads) 
-    dataset_test_u = preprocess_pipeline(dataset_test_u, text_vectorizer, embedding_layer, n_batch, n_threads) 
+        n_validation = int(n_train * 0.6)
+        n_test_set = int(n_train * 0.4)
 
-    return dataset_train_full_u, dataset_validation_u, dataset_test_u   
+        dataset_train_full = dataset_train_pos.concatenate(dataset_train_neg)
+        text_vectorizer.adapt(dataset_train_full)
+        embedding_layer = embedding_layer( output_dim = EMBEDDING_DIM, input_dim=len(text_vectorizer.get_vocabulary()) + 2)
+
+        dataset_train_pos_u = dataset_train_pos.map(lambda x: [x,0], num_parallel_calls=n_threads)
+        dataset_train_neg_u = dataset_train_neg.map(lambda x: [x,1], num_parallel_calls=n_threads)
+        train_ds = dataset_train_pos_u.concatenate(dataset_train_neg_u).shuffle(shuffle_buffer)
+
+        dataset_test_pos_u = dataset_test_pos.map(lambda x: [x,0], num_parallel_calls=n_threads)
+        dataset_test_neg_u = dataset_test_neg.map(lambda x: [x,1], num_parallel_calls=n_threads)
+        dataset_test_full_u = dataset_test_pos_u.concatenate(dataset_test_neg_u)
+        
+        validation_ds = dataset_test_full_u.take(n_validation).shuffle(shuffle_buffer)
+        test_ds = dataset_test_full_u.skip(n_validation).shuffle(shuffle_buffer)
+
+    preprocessed_train_ds = preprocess_pipeline(train_ds, text_vectorizer, embedding_layer, n_batch)
+    preprocessed_validation_ds = preprocess_pipeline(validation_ds, text_vectorizer, embedding_layer, n_batch)
+    preprocessed_test_ds = preprocess_pipeline(test_ds, text_vectorizer, embedding_layer, n_batch)
+
+    return preprocessed_train_ds, preprocessed_validation_ds, preprocessed_test_ds
 
 try :
     os.makedirs(WORKING_DIR)
@@ -111,16 +138,15 @@ if not os.path.exists(os.path.join( WORKING_DIR, tar_filename)):
 if not os.path.exists(os.path.join(WORKING_DIR, 'aclImdb')):
     extract_gzip( os.path.join( WORKING_DIR, tar_filename), WORKING_DIR )
 
-train_dataset, validation_dataset, test_dataset = preprocess_reviews(os.path.join(WORKING_DIR, 'aclImdb'))
+train_ds, validation_ds, test_ds = get_datasets(os.path.join(WORKING_DIR, 'aclImdb'), use_tfds=True)
 
 # model Binary classifier ( Positive or Negative Movie)
-input_= tf.keras.layers.Input(shape=[2])
+input_= tf.keras.layers.Input(shape=[EMBEDDING_DIM])
 hidden1 = tf.keras.layers.Dense(200, activation='relu')(input_)
 hidden2 = tf.keras.layers.Dense(100, activation='relu')(hidden1)
-hidden3 = tf.keras.layers.Dense(20, activation='relu')(hidden2)
-hidden4 = tf.keras.layers.Dense(5, activation='relu')(hidden3)
-output = tf.keras.layers.Dense(1, activation='sigmoid')(hidden4)
+hidden3 = tf.keras.layers.Dense(100, activation='relu')(hidden2)
+output = tf.keras.layers.Dense(1, activation='sigmoid')(hidden3)
 model = tf.keras.Model( inputs=[input_], outputs=[output])
 print(model.summary())
 model.compile( loss='binary_crossentropy', optimizer='sgd', metrics=['accuracy'])
-history = model.fit(train_dataset, epochs=10, validation_data=validation_dataset)
+history = model.fit(train_ds, epochs=10, validation_data=validation_ds)
