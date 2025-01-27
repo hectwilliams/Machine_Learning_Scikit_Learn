@@ -11,15 +11,15 @@ import requests
 import tarfile
 import re
 import tensorflow_datasets as tfds 
+import sys 
 
 IMDB_DATASET_URL = 'https://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz'
 WORKING_DIR = os.path.join(os.getcwd(), 'movie_review_dataset')
-DEBUG_MODE = True
-USER_REVIEW_MAX_LENGTH = 1000
 N_TRAIN = 25000
-BATCH_SIZE = 32 
-USE_TFDS = True
+BATCH_SIZE = 32
 EMBEDDING_DIM = 30
+USE_TFDS = True
+DEBUG_MODE = True
 
 def download_dataset(url, name):
     ''' 
@@ -38,44 +38,54 @@ def extract_gzip(file_path, extract_path):
         print('tar.gz file extraction error')
 
 def preprocess_pipeline( ds:tf.data.Dataset, string_tokenizer_func, embedding_func, batch_size, n_threads=5):
+    '''
+        Preprocess: TextVectorization ->Embedding
+    '''
     ds = ds.map(lambda review, score: (string_tokenizer_func(review) , score), num_parallel_calls=n_threads)
     ds = ds.map(lambda tokens, score: ( tf.multiply( tf.reduce_mean(embedding_func(tokens), axis=0) , tf.sqrt( tf.cast(len(tokens), tf.float32)) ) , score), num_parallel_calls=n_threads)
-    return ds.batch(batch_size).prefetch(1)
+    return ds.batch(batch_size, drop_remainder=True, num_parallel_calls=n_threads).prefetch(1)
 
-def get_datasets(imdb_path, use_tfds):
+def get_datasets(imdb_path, use_tfds, debug = False):
+    '''
+        Downloads reviews from webpage or downloads using TFDS; followed by preprocessing pipelines.
+    '''
     text_vectorizer = tf.keras.layers.TextVectorization
     embedding_layer = tf.keras.layers.Embedding
-    n_validation = n_batch =  BATCH_SIZE
-    shuffle_buffer = BATCH_SIZE
-    
-    if DEBUG_MODE:
-        n_batch = 1
-        n_train = 2000
-        n_train_over_2 = n_train // 2
+    n_train = n_test = n_validation = shuffle_buffer = N_TRAIN
+    n_batch = BATCH_SIZE
+    n_threads = 5
 
-    n_validation = int(n_train * 0.6)
-    n_test_set = int(n_train * 0.4)
+    if debug:
+        n_batch = 5
+        n_train = shuffle_buffer = 2000
+    
+    n_train_over_2 = n_train // 2
+    n_validation = int(n_test * 0.6)
+    n_test  = int(n_test * 0.4)
+    text_vectorizer = text_vectorizer()
 
     if use_tfds:
-        text_vectorizer = text_vectorizer()
         ds = tfds.load(name="imdb_reviews")
+        imdb_train_ds = ds['train'].take(n_train)
+        imdb_test_ds = ds['test'].take(n_train)
         
-        imdb_train_ds = ds['train'].take(n_train).cache()
-        imdb_test_ds = ds['test'].take(n_train).cache()
+        reviews_ds = imdb_train_ds.map(  lambda dict_: dict_['text'] , num_parallel_calls=n_threads)
+        train_ds = imdb_train_ds.map(lambda dict_: (dict_['text'],dict_['label'] ) , num_parallel_calls=n_threads) 
+        test_ds  = imdb_test_ds.map(lambda dict_: (dict_['text'],dict_['label'] ) , num_parallel_calls=n_threads)
         
-        text_vectorizer.adapt(imdb_train_ds.map(lambda dict_: dict_['text']))
+        text_vectorizer.adapt( reviews_ds)
+        embedding_layer = embedding_layer( output_dim = EMBEDDING_DIM, input_dim=len(text_vectorizer.get_vocabulary()))
         
-        train_ds = imdb_train_ds.map(lambda dict_: (dict_['text'],dict_['label'] ))
-        test_ds  = imdb_test_ds.map(lambda dict_: (dict_['text'],dict_['label'] ))
+        validation_ds = test_ds.take(n_validation)
+        test_ds = test_ds.skip(n_validation)
         
-        validation_ds = test_ds.take(n_validation).cache()
-        test_ds = test_ds.skip(n_validation).cache()
+        train_ds = train_ds.cache()
+        test_ds = test_ds.cache()
+        validation_ds = validation_ds.cache()
 
-        embedding_layer = embedding_layer( output_dim = EMBEDDING_DIM, input_dim=len(text_vectorizer.get_vocabulary()) + 2)
+        train_ds = train_ds.shuffle(shuffle_buffer).repeat(1)
+
     else:
-        n_train = N_TRAIN
-        text_vectorizer = text_vectorizer()
-        n_threads = 5
 
         train_path = os.path.join(imdb_path, 'train')
         test_path = os.path.join(imdb_path, 'test')
@@ -101,11 +111,11 @@ def get_datasets(imdb_path, use_tfds):
         dataset_test_neg = dataset_test_neg.take(n_train_over_2)     
     
         n_validation = int(n_train * 0.6)
-        n_test_set = int(n_train * 0.4)
+        n_test = int(n_train * 0.4)
 
         dataset_train_full = dataset_train_pos.concatenate(dataset_train_neg)
         text_vectorizer.adapt(dataset_train_full)
-        embedding_layer = embedding_layer( output_dim = EMBEDDING_DIM, input_dim=len(text_vectorizer.get_vocabulary()) + 2)
+        embedding_layer = embedding_layer( output_dim = EMBEDDING_DIM, input_dim=len(text_vectorizer.get_vocabulary()) )
 
         dataset_train_pos_u = dataset_train_pos.map(lambda x: [x,0], num_parallel_calls=n_threads)
         dataset_train_neg_u = dataset_train_neg.map(lambda x: [x,1], num_parallel_calls=n_threads)
@@ -138,15 +148,15 @@ if not os.path.exists(os.path.join( WORKING_DIR, tar_filename)):
 if not os.path.exists(os.path.join(WORKING_DIR, 'aclImdb')):
     extract_gzip( os.path.join( WORKING_DIR, tar_filename), WORKING_DIR )
 
-train_ds, validation_ds, test_ds = get_datasets(os.path.join(WORKING_DIR, 'aclImdb'), use_tfds=True)
-
-# model Binary classifier ( Positive or Negative Movie)
-input_= tf.keras.layers.Input(shape=[EMBEDDING_DIM])
-hidden1 = tf.keras.layers.Dense(200, activation='relu')(input_)
-hidden2 = tf.keras.layers.Dense(100, activation='relu')(hidden1)
-hidden3 = tf.keras.layers.Dense(100, activation='relu')(hidden2)
-output = tf.keras.layers.Dense(1, activation='sigmoid')(hidden3)
+train_ds, validation_ds, test_ds = get_datasets(os.path.join(WORKING_DIR, 'aclImdb'), use_tfds=True, debug=DEBUG_MODE)
+    
+input_ = tf.keras.layers.Input(shape=[EMBEDDING_DIM])
+hidden1 = tf.keras.layers.Dense(EMBEDDING_DIM, activation='relu')(input_)
+hidden2 = tf.keras.layers.Dense(550, activation='relu')(hidden1)
+hidden3 = tf.keras.layers.Dense(550, activation='relu')(hidden2)
+hidden4 = tf.keras.layers.Dense(10, activation='relu')(hidden3)
+output = tf.keras.layers.Dense(1, activation='sigmoid')(hidden4)
 model = tf.keras.Model( inputs=[input_], outputs=[output])
 print(model.summary())
 model.compile( loss='binary_crossentropy', optimizer='sgd', metrics=['accuracy'])
-history = model.fit(train_ds, epochs=10, validation_data=validation_ds)
+history = model.fit(train_ds, validation_data=validation_ds)
