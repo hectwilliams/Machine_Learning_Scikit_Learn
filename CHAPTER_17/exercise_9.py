@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 '''
     Q. Try using a denoising autoencodder to pretrain an image classifier. 
 
@@ -12,7 +13,6 @@
     A.  Pretraining helps the model converge to lower loss 
  
 '''
-#!/usr/bin/env python3
 import os
 import numpy as np
 import pickle
