@@ -9,7 +9,7 @@
 
     Q. Build a classification DNN, reusing the lower layers of the autoencoder. Train it using only 500 images from the training set. Does it perform better with or without pretraining?
 
-    A.  TBD
+    A.  Pretraining helps the model converge to lower loss 
  
 '''
 
@@ -23,7 +23,9 @@ import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE 
 
-DS_DIR = os.path.join('/Users/hectorwilliams/Downloads', 'cifar-100-python')
+# Download CFAR-100 into current working directory: see https://www.cs.toronto.edu/~kriz/cifar.html 
+# unzip cifar-100-python.tar.gz (unzipped directory should be cifar-100-python)
+DS_DIR = os.path.join(os.getcwd(), 'cifar-100-python') 
 N_255 = 255.0
 N_EPOCHS = 3000
 BATCH_SIZE = 2
