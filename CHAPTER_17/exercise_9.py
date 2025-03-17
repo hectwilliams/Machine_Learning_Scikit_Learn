@@ -12,8 +12,6 @@
     A.  Pretraining helps the model converge to lower loss 
  
 '''
-# Download CFAR-100 into current working directory: see https://www.cs.toronto.edu/~kriz/cifar.html 
-# unzip cifar-100-python.tar.gz (unzipped directory should be cifar-100-python)
 #!/usr/bin/env python3
 import os
 import numpy as np
@@ -26,7 +24,9 @@ from sklearn.manifold import TSNE
 from matplotlib.widgets import Button, Slider
 from matplotlib.backend_bases import MouseEvent, Event
 
-DS_DIR = os.path.join('/Users/hectorwilliams/Downloads', 'cifar-100-python')
+# Download CFAR-100 into current working directory: see https://www.cs.toronto.edu/~kriz/cifar.html 
+# unzip cifar-100-python.tar.gz (unzipped directory should be cifar-100-python)
+DS_DIR = os.path.join(os.getcwd(), 'cifar-100-python')
 N_255 = 255.0
 N_EPOCHS = 3000
 N_EPOCHS_DNN =  3000
