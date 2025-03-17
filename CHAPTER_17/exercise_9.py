@@ -9,8 +9,8 @@
 
     Q. Build a classification DNN, reusing the lower layers of the autoencoder. Train it using only 500 images from the training set. Does it perform better with or without pretraining?
 
-    A. TBD
-
+    A.  TBD
+ 
 '''
 
 #!/usr/bin/env python3
