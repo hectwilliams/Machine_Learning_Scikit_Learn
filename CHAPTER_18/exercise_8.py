@@ -1,44 +1,34 @@
 #! /usr/bin/env python3
 
+"""
+    Solve lunar lander game by creating a policy (i.e. model) 
+
+    command-line:
+    
+        exercise_8.py train
+            - trains game
+
+        exercise_8.py play
+            - opens simulator and plays game using model
+"""
+
 import numpy as np 
 import matplotlib.pyplot as plt
 import tensorflow as tf 
 import os 
 import sys 
+import logging 
+import gymnasium as gym
+
 MODEL_FILENAME = 'lunar_lander_model.keras'
 SYNTH_DURATION = 1 # second
 SYNTH_FREQ = 440
 
-"""
 
-
-Actions 
-    0 - do nothing
-    1 - fire left orientation engine 
-    2 - fire main engine 
-    3 - fire right orientation engine 
-
-Observation 
-    [
-        x coordinate 
-
-        y coordinate 
-
-        x linear velocity
-
-        y linear velocity 
-
-        angle 
-
-        angular velocity 
-
-        left leg touch floor 
-
-        right leg touch floor 
-    ]
-
-"""
-import gymnasium as gym
+def exponential_decay(lr0:float, s:int):
+    def exponential_decay_function(epoch):
+        return lr0 * 0.1**(epoch/s)
+    return exponential_decay_function
 
 def verbose_obs(obs):
     return dict(coord_xy=obs[:2], velocityXY=xy_to_phasor(obs[2:4]), angle=np.rad2deg(obs[5]) , left_leg_touch=obs[6], right_leg_touch=obs[7])
@@ -83,7 +73,7 @@ def play_single_step(env, obs, model, loss_fn):
         loss_mean = tf.reduce_mean(loss) # mean of batch
         grads = Tape.gradient(loss_mean, model.trainable_variables) 
         obs, reward, done, trunc, info  = env.step(action[0].numpy())
-        return obs, reward, done, grads         
+        return obs, reward, done, grads, loss         
 
 def play_episodes(env, n_episodes, n_max_steps, model, loss_fn):
     """
@@ -106,24 +96,48 @@ def play_episodes(env, n_episodes, n_max_steps, model, loss_fn):
         tuple containing the following:
             rewards_per_episode - indexed by episode, each element is a list of rewards per time step
             grads_per_episode - indexed by episode, each element is a list of gradients per time step 
+    
+    Note:
+        obs
+        [x coordinate, y coordinate, x velocity , y velocity , angle, angular velocity, left leg lands on ground, right leg lands on ground]
+
     """
     grads_per_episode = []
     rewards_per_episode = [] 
+    loss_per_episode = [] 
+
     for episode in range(n_episodes):
-        # print( f'episode\t {episode}')
         rewards = []
         grads = []
+        losses = []
         obs, info = env.reset() 
+
         for step in range(n_max_steps):
-            obs, reward, done, grad = play_single_step(env, obs,model,loss_fn)
+            obs, reward, done, grad, loss = play_single_step(env, obs,model,loss_fn)
+
+            # charge for moving away from 0,0 point
+            reward += -np.tanh( np.linalg.norm(obs[:2] ,ord=2) )
+            # reward += 1e-18 * -np.abs(np.tanh(obs[0:1]) ) # charge x for offset from origin
+
+            #  charge velocity vector
+            reward += -np.tanh(np.linalg.norm(obs[2:4]))
+            reward += 1e-9 * -np.abs(np.tanh(obs[3:4]) ) # charge speed in vertical direction
+            
+            #  charge angular velocity 
+            reward += -np.tanh(np.linalg.norm(obs[5:6]))
+
             rewards.append(reward)
-            # print(f'avg reward:\t{np.mean(np.array(reward))}')
             grads.append(grad)
+            losses.append(loss)
+
             if done:
-                break 
+                break
+
+        loss_per_episode .append(losses)
         rewards_per_episode.append(rewards)
         grads_per_episode.append(grads)
-    return rewards_per_episode, grads_per_episode
+
+    return rewards_per_episode, grads_per_episode, loss_per_episode
 
 def discount_rewards(rewards: list, discount_factor: float):
     """
@@ -199,11 +213,22 @@ def train_policy(env, n_iterations, n_episodes, n_max_steps, model, loss_fn, opt
     """
     
     sum_of_discounted_rewards = np.zeros(shape=(n_iterations))
+    exponential_decay_func  = exponential_decay(0.04, 350)
+    lr_decay = 1
+    mean_reward_less_2_count = 0
+    logger = logging.getLogger("train")
+    log_path = os.path.join(os.getcwd(), "lunar_lander_train.log")
+    logging.basicConfig(filename=log_path, level=logging.INFO, format='%(asctime)s %(iteration)s %(lr)s %(mean_reward)s %(mean_loss)s')
+    moving = np.zeros((10))
     for iteration in range(n_iterations):
-        rewards_per_episode, grads_per_episode = play_episodes(env, n_episodes,n_max_steps,model, loss_fn)
+        
+        lr  = exponential_decay_func(iteration)
+        optimizer = tf.keras.optimizers.SGD(learning_rate=lr)
+
+        rewards_per_episode, grads_per_episode, losses_per_episode = play_episodes(env, n_episodes,n_max_steps,model, loss_fn)
         discounted_normalized_rewards_per_episode = discount_and_normalize_rewards(rewards_per_episode,discount_factor)
         mean_grads = []
-        
+        captured_good_model_state = False 
         for trainable_variables_index in range(len(model.trainable_variables)):
 
             weighted_trainable_variables = [ discounted_normalized_reward * grads_per_episode[episode_index][step][trainable_variables_index] # grads[0][0][0] grads[1][0][0] grads[2][0][0]  ... grads[0][1][0] grads[1][1][0] grads[2][1][0] ... grads[0][0][1]  grads[1][0][1]  grads[2][0][1] ...
@@ -215,26 +240,56 @@ def train_policy(env, n_iterations, n_episodes, n_max_steps, model, loss_fn, opt
 
         optimizer.apply_gradients(zip(mean_grads, model.trainable_variables))
         sum_of_discounted_rewards[iteration] = np.sum(np.concatenate(discounted_normalized_rewards_per_episode))
-        model.save(os.path.join(os.getcwd(), MODEL_FILENAME))
-        print(f"\r {iteration+1}/{n_iterations}")
-    plt.plot(np.arange(n_iterations), sum_of_discounted_rewards)
-    plt.xlabel('iteration')
-    plt.ylabel('sum transformed rewards ')
-    plt.show()
+        
+        log_dict = {
+            'iteration': iteration + 1 , 
+            'lr': np.round(lr,4), 
+            'mean_reward': np.round(np.mean(np.concatenate(rewards_per_episode)),4) , 
+            'mean_loss': np.mean(np.concatenate(losses_per_episode)).round(4)
+        }
+        logger.info("", extra=log_dict)
 
+        mean_reward_less_2_count += int(log_dict['mean_reward'] > -2.0)
+        moving[iteration % 10] = log_dict['mean_loss']
+        captured_good_model_state = captured_good_model_state or (log_dict['mean_reward'] > -2.0)
+        
+        # search for optimal model metrics 
+
+        if captured_good_model_state:
+            continue
+        elif (iteration >= 30 and mean_reward_less_2_count < 5):
+            return False
+        
+        elif ( iteration > 20 and (np.sum(moving)/10) < 0.9 ):
+            return False
+        
+        model.save(os.path.join(os.getcwd(), MODEL_FILENAME))   # always save model
+
+    return True
+
+def gen_model(random_seed_kernel=42):
+    """
+        Generates Tensorflow model (i.e. Policy)
+
+    Args:
+
+        random_seed_kernel - seed value determines sampling breadth used for tf.keras.initializers.LecunUniform
+    
+    Returns:
+
+        Tensorflow Model 
+    """
+    input_ = tf.keras.layers.Input(shape=(n_inputs,))
+    print('KERNEL RANDOM SEED', random_seed_kernel)
+    z = tf.keras.layers.Dense(32, activation='elu', kernel_initializer=tf.keras.initializers.LecunUniform(seed=random_seed_kernel)) (input_)
+    z = tf.keras.layers.Dense(16, activation='elu', kernel_initializer=tf.keras.initializers.LecunUniform(seed=random_seed_kernel)) (z)
+    z = tf.keras.layers.Dense(8, activation='elu', kernel_initializer=tf.keras.initializers.LecunUniform(seed=random_seed_kernel)) (z)
+    output_ = tf.keras.layers.Dense(4, activation='softmax')(z)
+    model = tf.keras.Model(inputs=[input_], outputs=[output_])
+    return model 
 
 env_options = dict(id="LunarLander-v3", continuous=False, gravity=-10.0, enable_wind=False, wind_power=15.0, turbulence_power=1.5)
 n_inputs = 8 
-# sample_rate = 44100
-# # generate a 1-second sine tone at 440 Hz
-# y = np.sin(2 * np.pi * 440.0 * np.arange(sample_rate * 1.0) / sample_rate)
-# tfm = sox.Transformer()
-# tfm.build_file(
-#     input_array=y, sample_rate_in=sample_rate,
-#     output_filepath=os.path.join(os.getcwd(), 'debug_beep.wav' )
-# )
-# os.system('sox {} -qd'.format({os.path.join(os.getcwd(), 'debug_beep.wav' )}))
-# assert(False)
 
 if len(sys.argv) < 2:
     
@@ -242,47 +297,56 @@ if len(sys.argv) < 2:
 
 elif sys.argv[1] == 'train':
     
+    file = os.path.join(  os.getcwd() , "lunar_lander_model.keras"  )
+    
+    if os.path.exists(file):
+        os.remove(file)
+    
     env = gym.make(**env_options)
-    input_ = tf.keras.layers.Input(shape=(n_inputs,))
-    z = tf.keras.layers.Dense(128) (input_)
-    z = tf.keras.layers.Dense(64) (z)
-    z = tf.keras.layers.Dense(32) (z)
-    z = tf.keras.layers.Dense(16) (z)
-    z = tf.keras.layers.Dense(8) (z)
-    output_ = tf.keras.layers.Dense(4, activation='elu')(z)
-    model = tf.keras.Model(inputs=[input_], outputs=[output_])
+
     loss_fn = tf.keras.losses.CategoricalCrossentropy()
     optimizer = tf.keras.optimizers.SGD(learning_rate=0.01)
-    # model.compile(loss=loss_fn, optimizer=optimizer)
-    # replay_buffer = deque(maxlen=2000)
     obs, info = env.reset() 
     discount_factor = 0.90
-    n_iteration = 2000
-    n_episodes = 6
-    n_steps  = 100 
-    
-    if os.path.exists(os.path.join(os.getcwd(), MODEL_FILENAME)):
-        model = tf.keras.models.load_model(os.path.join(os.getcwd(), MODEL_FILENAME))
-        
-    train_policy(env, n_iteration, n_episodes, n_steps, model, loss_fn, optimizer, discount_factor)
+    n_iteration = 500
+    n_episodes = 10                                                                                                                                                                                                                                                                                                                       
+    n_steps  = 500 
+    num_of_sync_runs = 0
+    k = 1000000
+    model = gen_model(8, np.random.randint(k))    
+
+    print(model.summary())
+    model.save_weights(os.path.join(os.getcwd(), 'lunar_lander_weights.weights.h5' ))
+
+    for i in range(20):
+        ret = train_policy(env, n_iteration, n_episodes, n_steps, model, loss_fn, optimizer, discount_factor)
+        if ret:
+            model.save_weights(os.path.join(os.getcwd(), 'lunar_lander_weights.weights.h5' ))
+            model.save(os.path.join(os.getcwd(), MODEL_FILENAME + "_highperformance"))
+            break
+        else:
+            seed = np.random.randint(k)
+            model = gen_model(8, seed)
 
 elif sys.argv[1] == 'play':
 
     model = tf.keras.models.load_model(os.path.join(os.getcwd(), MODEL_FILENAME))
     env = gym.make(**{**env_options, 'render_mode':'human'})
-    steps = 200
+    steps = 1000
     episodes = 10
-
+    logger_play = logging.getLogger(__name__)
+    log_path = os.path.join(os.getcwd(), "lunar_lander_infer.log")
+    logging.basicConfig(filename=log_path, level=logging.INFO, format='%(asctime)s %(obs)-5s %(action)s %(reward)s %(done)s')
     for episode in range(episodes):
         obs, info = env.reset() 
-        # print(env.action_space.sample())
         for i in range(steps):
-            action_probabilities = model(obs[np.newaxis])
+            X_new = obs[np.newaxis]
+            action_probabilities = model(X_new)
             action =  tf.argmax(action_probabilities, axis=1)
             action = action[0].numpy()
             random_sample = env.action_space.sample()
             obs, reward, done, trunc, info = env.step(action)
-            print(f'action: {action}')
+            log_dict = {'obs': np.round(obs,4), 'action': action, 'reward':np.round(reward, 3), 'done': done}
+            logger_play.info("", extra=log_dict)
             if done:
-                print('--done--')
                 break
