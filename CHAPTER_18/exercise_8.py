@@ -260,7 +260,7 @@ def train_policy(env, n_iterations, n_episodes, n_max_steps, model, loss_fn, opt
             # save saved_model format for serving API
             model_version = "0001"
             model_name = "lunar_lander_model"
-            model_path = os.path.join(os.getcwd(),'../','chapter19', model_name, model_version)
+            model_path = os.path.join(os.getcwd(), model_name, model_version)
             model.export(model_path) # exports format required for TF Serving 
             if user_prompt() == '2':
                 break 
