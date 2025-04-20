@@ -3,7 +3,7 @@ import threading
 import sys 
 
 class AsyncReader:
-    """reads pipe strings without block main thread
+    """Reads PIPE strings and prompts user for input.
     """
     def __init__(self, stream):
         """
@@ -37,7 +37,7 @@ class AsyncReader:
         
     def __get_answer(self):
         """
-            Thread handles user's attempt to answer prompt     
+             user's attempt to answer prompt     
         """
         ret = input()
         
