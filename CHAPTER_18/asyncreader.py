@@ -19,7 +19,7 @@ class AsyncReader:
         self.start_time = time.time()
         self.thread2 = threading.Thread(target=self.__get_answer, daemon=True)
         self.thread3 = threading.Thread(target=self.__shutdown_counter)
-        self.option = 1
+        self.option = 0
         self.counter = 10
         self.lock = threading.Lock()
 
@@ -31,6 +31,8 @@ class AsyncReader:
             time.sleep(1)
             with self.lock:
                 self.counter -= 1
+        if self.option == 0:
+            sys.stdin.close()
         sys.stdout.write('')
         
     def __get_answer(self):
