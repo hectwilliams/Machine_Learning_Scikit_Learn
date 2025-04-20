@@ -255,30 +255,14 @@ def train_policy(env, n_iterations, n_episodes, n_max_steps, model, loss_fn, opt
         if (iteration >= 30 and mean_reward_less_2_count < 5) or ( iteration > 20 and (np.sum(moving)/10) < 0.9 ) or (iteration == 20 and not captured_good_model_state):  
             return False 
         
-        # prompt user 
-        if (iteration + 1) % 10  == 0:
-            # save saved_model format for serving API
+        # save TF Serving models that show good training performance ( greedy algorithm)
+        if (mean_reward_less_2_count > 5 )  and  ((iteration + 1) % 10  == 0):
             model_version = "0001"
             model_name = "lunar_lander_model"
             model_path = os.path.join(os.getcwd(), model_name, model_version)
             model.export(model_path) # exports format required for TF Serving 
-            if user_prompt() == '2':
-                break 
 
     return True
-
-
-def user_prompt():
-    """
-        Console prompting user to stop or continue training 
-    """
-    p = subprocess.Popen(['echo',"Continue Training?\nOption\n1-Continue\n2-Stop\nEnter Option:" ] , stdout=subprocess.PIPE, stdin=subprocess.PIPE, text=True) 
-    reader = asyncreader.AsyncReader(p.stdout)
-    prompt = reader.get()
-    print(prompt,end='')
-    reader.thread3.join()
-    p.kill()
-    return reader.option
 
 def gen_model(random_seed_kernel):
     """

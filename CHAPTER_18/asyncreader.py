@@ -32,7 +32,7 @@ class AsyncReader:
             with self.lock:
                 self.counter -= 1
         if self.option == 0:
-            sys.stdin.close()
+            pass 
         sys.stdout.write('')
         
     def __get_answer(self):
