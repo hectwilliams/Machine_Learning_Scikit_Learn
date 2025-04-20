@@ -20,22 +20,28 @@ class AsyncReader:
         self.thread2 = threading.Thread(target=self.__get_answer, daemon=True)
         self.thread3 = threading.Thread(target=self.__shutdown_counter)
         self.option = 1
-    
+        self.counter = 10
+        self.lock = threading.Lock()
+
     def __shutdown_counter(self):
-        time.sleep(10)
-        sys.stdout.write('\nTimeout, training will continue\n')
+        """
+            Decrementing Counter
+        """
+        while self.counter >= 0:
+            time.sleep(1)
+            with self.lock:
+                self.counter -= 1
+        sys.stdout.write('')
         
     def __get_answer(self):
         """
             Thread handles user's attempt to answer prompt     
         """
-        time.sleep(0.5)
-        ret = sys.stdin.readline().strip() # read console -1 removes new line at end
+        ret = input()
         
         while ret not in ['1','2']:
             sys.stdout.write('Enter Option:')
-            sys.stdout.flush()
-            ret = sys.stdin.readline().strip() # read console
+            ret = input()
         
         if ret.strip() == '1':
             sys.stdout.write('continuing...\n')
@@ -43,6 +49,9 @@ class AsyncReader:
             sys.stdout.write('training ended by user ... \n')
         
         self.option = ret
+
+        with self.lock:
+            self.counter = 0
 
     def __get_lines(self):
         """
