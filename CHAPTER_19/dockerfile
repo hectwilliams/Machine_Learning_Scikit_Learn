@@ -1,0 +1,29 @@
+
+
+# Docker file used to generate and configure containers 
+
+FROM tensorflow/serving:latest 
+
+ENV MODEL_NAME="lunar_lander_model"
+ENV FLASK_APP='/home/app.py'
+ENV FLASK_ENV='development'
+
+RUN apt-get update
+RUN apt-get install -y python3
+RUN apt install -y python3-pip 
+RUN apt-get install -y curl
+
+COPY app.py /home/app.py
+
+EXPOSE 8500 8501 
+
+# WORKDIR /home
+
+COPY job_requirements.txt /home/requirements.txt 
+RUN pip install -r /home/requirements.txt 
+
+# ENTRYPOINT [ "flask", "run", "-h", "0.0.0.0", "-p", "7001" ]
+
+
+
+
