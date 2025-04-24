@@ -3,7 +3,7 @@
 
     Using Google cloud I was close to training a custom job using Vertex AI. Unfortunately I ran out of compute credits :)
 
-    I included essential files used to solve this problem. They are prefix with ex11_custom
+    Refer to the directory exercise_11._main_pkg trainer subdirectory for files uses to train a custom job. 
     
 """
 
