@@ -32,5 +32,4 @@ Format of each directory:
 |  18   | Reinforcement Learning|
 |  19   | Training and Deploying Tensorflow|
 
-Style Tranfer :)
-![Styletransfer](https://github.com/hectwilliams/Machine_Learning_Scikit_Learn/CHAPTER_14/exercise_11_StyleTransferExample.png)
+![Styletransfer](https://github.com/hectwilliams/Machine_Learning_Scikit_Learn/blob/main/CHAPTER_14/exercise_11_StyleTransferExample.png?raw=true)
