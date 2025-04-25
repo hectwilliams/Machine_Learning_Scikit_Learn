@@ -1,9 +1,7 @@
 
 # Machine_Learning_Scikit_Learn_Keras_Tensorflow    
 
-## Layout
-
-Format of each directory:
+## Main Directory Format
 
 - Main Directory
     - CHAPTER_<>                
