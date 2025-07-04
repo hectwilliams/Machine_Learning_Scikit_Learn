@@ -22,7 +22,8 @@
 | Chapter | Description |
 |----------|----------  |
 |  1   | Machine Learning Landscape   |
-|  2 - 12   | |
+|  2   | End-to-End Project   |
+|  3 - 12   | |
 |  13   | Loading, Preprocessing Data   |
 |  14   | Computer Vision Using Convolutional Neural Network   |
 |  15   | Processing Sequences using RNN and CNN   |
