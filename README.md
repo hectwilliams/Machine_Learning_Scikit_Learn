@@ -24,7 +24,8 @@
 |  1   | Machine Learning Landscape   |
 |  2   | End-to-End Project - Pipeline   |
 |  3   | Classification - Pipeline   |
-|  4 - 12   | |
+|  4   | Training Models   |
+|  5 - 12   | |
 |  13   | Loading, Preprocessing Data   |
 |  14   | Computer Vision Using Convolutional Neural Network   |
 |  15   | Processing Sequences using RNN and CNN   |
