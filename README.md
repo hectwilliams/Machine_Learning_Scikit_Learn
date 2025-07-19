@@ -1,22 +1,6 @@
 
 # Machine_Learning_Scikit_Learn_Keras_Tensorflow    
 
-## Main Directory Format
-
-- Main Directory
-    - CHAPTER_<>                
-        - exercise_<>.py        
-        - exercise_<>.py
-        - slides.pdf
-        - ...
-    - CHAPTER_<>
-        - exercise_<>.py
-        - exercise_<>.py
-        - slides.pdf
-        - ...
-
-    <> =  integer value >= 1 
-
 ## Chapters
 
 | Chapter | Description |
