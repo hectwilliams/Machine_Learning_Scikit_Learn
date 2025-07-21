@@ -12,7 +12,8 @@
 |  5   | Support Vector Machines   |
 |  6  | Decision Trees  |
 |  7  | Ensemble Learning and Random Forest  |
-|  8 - 12   | |
+|  8  | Dimensionality Reduction  |
+|  9 - 12   | |
 |  13   | Loading, Preprocessing Data   |
 |  14   | Computer Vision Using Convolutional Neural Network   |
 |  15   | Processing Sequences using RNN and CNN   |
