@@ -6,16 +6,17 @@
 
     A.
 
-      Label propagation is the ability to classifiy unsupervised instances which are similairy distrubuted to a small subset of supervised instances 
+      Label propagation is the ability to classifiy unsupervised instances which are similarly distributed to a small subset of supervised instances 
 
       Label propagation is used to classify unsupervised instances.
 
       Label propagation is implemented using the following guide:
       
-      - Create kmeans model ( model typically fit will to dataset)
+      - Create kmeans model (find optimal n_cluster for training set)
 
-      - Find the supervised data samples , map their samples to cluster centroids with highest affinity.  These are representative data elements
+      - the clusters are now representaive samples. Each centroid create should map to a target
 
-      - Label unsuperivsed instances by their affinity to the representative
+      - label unsupervised dataset to their nearest centroid cluster representative 
+      
 
 '''
