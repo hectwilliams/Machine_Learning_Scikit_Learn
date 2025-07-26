@@ -13,7 +13,8 @@
 |  6  | Decision Trees  |
 |  7  | Ensemble Learning and Random Forest  |
 |  8  | Dimensionality Reduction  |
-|  9 - 12   | |
+|  9  | Unsupervised Learning Techniques / Anomaly Detection / Clustering  |
+|  10 - 12   | |
 |  13   | Loading, Preprocessing Data   |
 |  14   | Computer Vision Using Convolutional Neural Network   |
 |  15   | Processing Sequences using RNN and CNN   |
