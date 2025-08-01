@@ -15,7 +15,8 @@
 |  8  | Dimensionality Reduction  |
 |  9  | Unsupervised Learning Techniques / Anomaly Detection / Clustering  |
 |  10  | Intro to Artificial Neural Networks with Keras |
-|  11 - 12   | |
+|  11  | Training Deep Neural Networks |
+|   12   | |
 |  13   | Loading, Preprocessing Data   |
 |  14   | Computer Vision Using Convolutional Neural Network   |
 |  15   | Processing Sequences using RNN and CNN   |
