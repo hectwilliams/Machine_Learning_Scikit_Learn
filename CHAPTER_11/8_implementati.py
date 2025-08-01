@@ -29,7 +29,7 @@ def find_good_lr(model, X_train, Y_train, X_val, Y_val, X_test, Y_test):
 
   lr_axis = np.zeros(LR_EVAL_ITERATIONS)
   
-  lr = 0.0003019951720402016
+  lr = 10e-5
 
   min_lr = np.finfo(np.float64).max
 
