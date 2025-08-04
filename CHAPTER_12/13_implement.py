@@ -109,9 +109,17 @@ for epoch in range(1, n_epochs + 1):
     
     mean_tr_accuracy( accuracy_fn(y_batch, y_pred) ) 
 
+    y_pred_val = model(X_val_tf, training=True) 
+  
+    val_training_loss = tf.reduce_mean(loss_fn(Y_val_tf, y_pred_val ))
+
+    val_accuracy = accuracy_fn(Y_val_tf, y_pred_val)
+
     metric_loss_list = [ "{:.3f}".format( m.result() ) for m in [ mean_tr_loss] + [ mean_tr_accuracy] ] 
 
-    print(f'|epoch={epoch} |step={step} |{" - ".join( metric_loss_list )}')
+    print(f'|epoch={epoch} |step={step} |training {" - ".join( metric_loss_list )}', end='')
+
+    print('\tvalidation {:.3f} - {:.3f}'.format(val_training_loss, val_accuracy))
   
   mean_tr_loss.reset_state()
 
