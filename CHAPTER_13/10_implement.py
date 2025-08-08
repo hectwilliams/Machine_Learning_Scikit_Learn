@@ -270,9 +270,38 @@ class ReviewsModel(tf.keras.Model):
 
     return {**base_config, 'layer_textvectorization': tf.keras.layers.serialize(self.layer_textvectorization), 'layer_embedding': tf.keras.layers.serialize(self.layer_embedding) }
 
-def run():
 
-  ds_train = file_pipeline('train')
+class LearningRateScheduler2(tf.keras.callbacks.LearningRateScheduler):
+  
+  def __init__(self, lr, s = 40, **kwargs):
+
+    def lr_scheduler_dec(func):
+      
+      def lr_scheduler_wrapper(lr_, s_):
+
+        def keras_lr_scheduler (epoch):
+
+          return lr_ * 0.1 **(epoch/s_)
+
+        return keras_lr_scheduler
+        
+      return lr_scheduler_wrapper
+      
+    @lr_scheduler_dec
+    def lr_scheduler(lr, s): tf.no_op() 
+
+    super().__init__(lr_scheduler(lr, s), **kwargs)
+
+
+def run():
+  
+  epochs = 10
+
+  size_dataset = -1 
+
+  size_batch = 8
+
+  ds_train = file_pipeline('train').take(size_dataset)
 
   ds_test = file_pipeline('test')
 
@@ -293,14 +322,16 @@ def run():
   checkpoint_cb = tf.keras.callbacks.ModelCheckpoint('chapter13_movies.keras', save_best_only=True)
 
   tensorboard_cb = tf.keras.callbacks.TensorBoard(os.path.join(os.getcwd(), "tensorboard_logs"))
+
+  learning_rate_cb = LearningRateScheduler2(0.04) 
   
-  ds_train_batch = ds_train.batch(1) 
+  ds_train_batch = ds_train.batch(size_batch) 
 
-  ds_val_batch = ds_val.batch(1)
+  ds_val_batch = ds_val.batch(size_batch)
 
-  ds_test_batch = ds_test.batch(1)
+  ds_test_batch = ds_test.batch(size_batch)
 
-  model.fit(ds_train_batch, validation_data = ds_val_batch, epochs=10 , callbacks=[checkpoint_cb, tensorboard_cb])
+  model.fit(ds_train_batch, validation_data = ds_val_batch, epochs=epochs , callbacks=[checkpoint_cb, tensorboard_cb, learning_rate_cb])
     
   model.evaluate(ds_test_batch)
 
