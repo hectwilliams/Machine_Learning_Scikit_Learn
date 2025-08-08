@@ -260,6 +260,10 @@ class ReviewsModel(tf.keras.Model):
 
 def run():
 
+  '''
+    custom training loop
+  '''
+  
   ds_train = file_pipeline('train')
 
   ds_test = file_pipeline('test')
@@ -269,20 +273,63 @@ def run():
   ds_test = ds_test.skip(15000)
 
   ds_comments = ds_train.map(lambda cmt, _ : cmt )
-  
+
   textvectorizer = TextVectorization2(ds_comments)
-  
+    
   embedding = Embedding2(input_dim = textvectorizer.vocabulary_size() + 2  , output_dim = 8)  
   
-  model = ReviewsModel(textvectorizer, embedding)
+  epochs = tf.constant(5)
 
-  model.compile ( loss=tf.keras.losses.BinaryCrossentropy(), optimizer=tf.keras.optimizers.SGD(learning_rate=0.0034) )
+  batch_size = tf.constant(32, dtype=tf.int64)
 
-  model.fit((ds_train.batch(32)), epochs=2)
+  optimizer = tf.keras.optimizers.SGD( learning_rate = 0.010 )
 
-  eval = model.evaluate(ds_test)
+  mean_loss = tf.keras.metrics.Mean()
 
-  print(eval)
+  best_loss = tf.Variable(0, dtype=tf.float32)
+
+  model = build_model(textvectorizer, embedding)
+  
+  writer = tf.summary.create_file_writer(os.path.join(os.getcwd(), 'tensorboard_logs'))
+
+  with writer.as_default():
+
+    for epoch in tf.range(1,epochs +1):
+
+      for step, (x_batch, y_batch) in tf.data.Dataset.enumerate(ds_train.shuffle(buffer_size=ds_train.cardinality()).batch(batch_size)):
+        
+        with tf.GradientTape() as tape:
+        
+          y_pred_batch, text_vect_aux_batch = model(x_batch, training=True)
+
+          filtered_mean_aux = tf.boolean_mask(text_vect_aux_batch, text_vect_aux_batch <= 100) # filters histogram
+          
+          # zeros_count = tf.reduce_sum(tf.cast(tf.equal(filtered_mean_aux, 0), tf.int32))
+
+          # ones_count = tf.math.count_nonzero(filtered_mean_aux)
+
+          tf.summary.histogram('Text-Vectorize0', filtered_mean_aux, step = step)
+
+          loss = tf.reduce_mean(tf.keras.losses.BinaryCrossentropy() (y_batch, y_pred_batch))
+
+          gradients = tape.gradient(loss, model.trainable_variables)
+          
+          optimizer.apply_gradients(zip( gradients, model.trainable_variables))
+
+        mean_loss(loss) 
+      
+        print(f'\r EPOCH -- {epoch}  STEP -- {step}  LOSS -- {loss}', end='')
+
+      print('AVG LOSS -- {}'.format(mean_loss.result()))
+
+      print('EVALUATE VALIDATION SET   {} ', model.evaluate(ds_val))
+
+      if best_loss < mean_loss.result():
+
+        model.save('reviews.keras')
+
+        best_loss.assign = mean_loss.result()
+
 
 if __name__ == '__main__':
 
