@@ -25,6 +25,6 @@
 |  18   | Reinforcement Learning|
 |  19   | Training and Deploying Tensorflow|
 
-  * - updated 
+  \* - updated 
 
 ![Styletransfer](https://github.com/hectwilliams/Machine_Learning_Scikit_Learn/blob/main/CHAPTER_14/exercise_11_StyleTransferExample.png?raw=true)
