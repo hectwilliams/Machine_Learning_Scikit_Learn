@@ -14,7 +14,7 @@ Description:
 
   Eval 
 
-  Note: Most important element is my pipeline and enabling AutoGraphing for some function to optimize code 
+  Note: custom pipelines created for readable and efficient code ( efficient using tf.function  to optimize pipeline stages)
 '''
 import tensorflow_datasets as tfds
 import matplotlib.pyplot as plt 
@@ -199,17 +199,18 @@ class TextVectorization2(tf.keras.layers.TextVectorization):
 
     super().__init__(**kwargs) 
 
-    self.adapt(self.dataset)
+    self.adapt(ds)
 
 class Embedding2(tf.keras.layers.Embedding):
 
   def __init__(self, input_dim, output_dim,  **kwargs):
 
-    self.out_dim = output_dim
+    self.output_dim = output_dim
 
     self.input_dim = input_dim
 
     super().__init__(input_dim, output_dim, **kwargs)
+
 
 
 class ReviewsModel(tf.keras.Model):
@@ -221,42 +222,53 @@ class ReviewsModel(tf.keras.Model):
     self.layer_textvectorization = textvectorization
 
     self.layer_embedding = embedding 
-
-    self.layer_hidden_Dense_1 = tf.keras.layers.Dense(50,activation= tf.keras.activations.relu  ) 
     
-    self.layer_hidden_Dense_2 = tf.keras.layers.Dense(50,activation= tf.keras.activations.relu  ) 
+    self.layer_avg_embedding = tf.keras.layers.Lambda(lambda matrix: tf.sqrt( tf.cast(  tf.shape(matrix)[1] , tf.float32)) * tf.reduce_mean(matrix, axis = 1) , output_shape=(embedding.output_dim,)  ) # product of avg-embedding and number of words in comment 
 
-    self.layer_hidden_Dense_3 = tf.keras.layers.Dense(50,activation= tf.keras.activations.relu  ) 
+    self.layer_hidden_Dense_1 = tf.keras.layers.Dense(10   , activation= tf.keras.layers.ELU(), kernel_initializer=tf.keras.initializers.HeUniform(seed=32) ) 
+    
+    self.layer_hidden_Dense_2 = tf.keras.layers.Dense(400   , activation= tf.keras.layers.ELU(), kernel_initializer=tf.keras.initializers.HeUniform(seed=32) ) 
 
-    self.out = tf.keras.layers.Dense(1, activation = tf.keras.activations.sigmoid  )
+    self.layer_hidden_Dense_3 = tf.keras.layers.Dense(400   , activation= tf.keras.layers.ELU(), kernel_initializer=tf.keras.initializers.HeUniform(seed=32) ) 
+    
+    self.layer_hidden_Dense_4 = tf.keras.layers.Dense(10   , activation= tf.keras.layers.ELU(), kernel_initializer=tf.keras.initializers.HeUniform(seed=32) ) 
+
+    self.zout = tf.keras.layers.Dense( 1, activation='sigmoid'  , kernel_initializer=tf.keras.initializers.GlorotNormal(seed=32))
+    
 
   def call(self, inputs): 
                           
-    z = self.layer_textvectorization(inputs) # input -> batch_size  x 1
+    z = self.layer_textvectorization(inputs) 
     
-    self.textvectorizer_aux = z # batch_size x 3
+    # self.textvectorizer_aux = z # side channel for tensorboard 
 
     z = self.layer_embedding(z)
-
+    
+    z = self.layer_avg_embedding(z) 
+    
     z = self.layer_hidden_Dense_1(z)
-
+    
     z = self.layer_hidden_Dense_2(z)
 
     z = self.layer_hidden_Dense_3(z)
+    
+    z = self.layer_hidden_Dense_4(z)
 
-    z_out = self.out(z) # batch_size x 1
+    return self.zout(z)   
 
-    return z_out
-  
+  def build (self, batch_input_shape):
+
+    super().build(batch_input_shape)
+
   def compute_output_shape(self, batch_input_shape):
 
     return batch_input_shape
   
   def get_config(self):
 
-    base_config = super.get_config()
+    base_config = super().get_config()
 
-    return {**base_config, 'textvectorization': tf.keras.layers.serialize(self.layer_textvectorization), 'embedding': tf.keras.layers.serialize(self.layer_embedding) }
+    return {**base_config, 'layer_textvectorization': tf.keras.layers.serialize(self.layer_textvectorization), 'layer_embedding': tf.keras.layers.serialize(self.layer_embedding) }
 
 def run():
 
@@ -266,23 +278,31 @@ def run():
 
   ds_val = ds_test.take(15000)
 
-  ds_test = ds_test.skip(15000)
+  ds_test = ds_test.skip(15000)  
 
   ds_comments = ds_train.map(lambda cmt, _ : cmt )
-  
+
   textvectorizer = TextVectorization2(ds_comments)
-  
-  embedding = Embedding2(input_dim = textvectorizer.vocabulary_size() + 2  , output_dim = 8)  
-  
+
+  embedding = Embedding2(textvectorizer.vocabulary_size() + 2  , 128)  
+
   model = ReviewsModel(textvectorizer, embedding)
 
-  model.compile ( loss=tf.keras.losses.BinaryCrossentropy(), optimizer=tf.keras.optimizers.SGD(learning_rate=0.0034) )
+  model.compile ( loss = tf.keras.losses.BinaryCrossentropy(), optimizer = tf.keras.optimizers.SGD(learning_rate=0.03, clipvalue=200, decay=1/4), metrics=[tf.keras.metrics.BinaryAccuracy() ] )
 
-  model.fit((ds_train.batch(32)), epochs=2)
+  checkpoint_cb = tf.keras.callbacks.ModelCheckpoint('chapter13_movies.keras', save_best_only=True)
 
-  eval = model.evaluate(ds_test)
+  tensorboard_cb = tf.keras.callbacks.TensorBoard(os.path.join(os.getcwd(), "tensorboard_logs"))
+  
+  ds_train_batch = ds_train.batch(1) 
 
-  print(eval)
+  ds_val_batch = ds_val.batch(1)
+
+  ds_test_batch = ds_test.batch(1)
+
+  model.fit(ds_train_batch, validation_data = ds_val_batch, epochs=10 , callbacks=[checkpoint_cb, tensorboard_cb])
+    
+  model.evaluate(ds_test_batch)
 
 if __name__ == '__main__':
 
