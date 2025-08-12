@@ -24,6 +24,7 @@ import os
 import requests
 import regex
 import tarfile
+import subprocess
 
 FETCH_MOVIE_DATASET = False # enable to download files to CWD and run script  
 
@@ -212,124 +213,160 @@ class Embedding2(tf.keras.layers.Embedding):
     super().__init__(input_dim, output_dim, **kwargs)
 
 
-class ReviewsModel(tf.keras.Model):
-
-  def __init__(self, textvectorization, embedding, **kwargs ):
-
-    super().__init__(**kwargs)
-
-    self.layer_textvectorization = textvectorization
-
-    self.layer_embedding = embedding 
-
-    self.layer_hidden_Dense_1 = tf.keras.layers.Dense(50,activation= tf.keras.activations.relu  ) 
+def build_model(textvectorizer, embedding):
+    '''
+      build neural network, TextVectorizer and Embedding included 
+    '''
     
-    self.layer_hidden_Dense_2 = tf.keras.layers.Dense(50,activation= tf.keras.activations.relu  ) 
+    z = ii = tf.keras.layers.Input(shape=(), dtype=tf.string)
 
-    self.layer_hidden_Dense_3 = tf.keras.layers.Dense(50,activation= tf.keras.activations.relu  ) 
+    z = textvectorizer(z)
 
-    self.out = tf.keras.layers.Dense(1, activation = tf.keras.activations.sigmoid  )
+    textvectorizer_aux = z
 
-  def call(self, inputs): 
-                          
-    z = self.layer_textvectorization(inputs) # input -> batch_size  x 1
+    z =  embedding(z)
+
+    z = tf.keras.layers.Lambda(lambda matrix: tf.sqrt( tf.cast(  tf.shape(matrix)[1] , tf.float32)) * tf.reduce_mean(matrix, axis = 1) , output_shape=(embedding.output_dim,)  ) (z) # product of avg-embedding and number of words in comment 
     
-    self.textvectorizer_aux = z # batch_size x 3
+    z = tf.keras.layers.Dense(5, activation = tf.keras.layers.ELU(), kernel_initializer=tf.keras.initializers.HeUniform(seed=32))(z) 
+    
+    z = tf.keras.layers.Dense(50, activation = tf.keras.layers.ELU(), kernel_initializer=tf.keras.initializers.HeUniform(seed=32))(z) 
+    
+    z = tf.keras.layers.Dense(500, activation = tf.keras.layers.ELU(), kernel_initializer=tf.keras.initializers.HeUniform(seed=32))(z) 
+    
+    z = tf.keras.layers.Dense(50, activation = tf.keras.layers.ELU(), kernel_initializer=tf.keras.initializers.HeUniform(seed=32))(z) 
+    
+    z = tf.keras.layers.Dense(5, activation = tf.keras.layers.ELU(), kernel_initializer=tf.keras.initializers.HeUniform(seed=32))(z) 
 
-    z = self.layer_embedding(z)
+    oo =  tf.keras.layers.Dense( 1, activation = 'sigmoid'  , kernel_initializer=tf.keras.initializers.GlorotNormal(seed=32))(z)
 
-    z = self.layer_hidden_Dense_1(z)
+    model = tf.keras.Model(inputs=[ii], outputs=[oo, textvectorizer_aux])
 
-    z = self.layer_hidden_Dense_2(z)
+    return model 
 
-    z = self.layer_hidden_Dense_3(z)
 
-    z_out = self.out(z) # batch_size x 1
+def keras_lr_scheduler (epoch, lr = 0.01, s=100): 
 
-    return z_out
+  decimal_num = tf.constant(7, dtype=tf.double)
   
-  def compute_output_shape(self, batch_input_shape):
-
-    return batch_input_shape
+  factor = tf.pow(10, decimal_num)
   
-  def get_config(self):
+  value = tf.Variable(lr * 0.1 **(epoch/s))
 
-    base_config = super.get_config()
+  value.assign(tf.round(value * factor))
 
-    return {**base_config, 'textvectorization': tf.keras.layers.serialize(self.layer_textvectorization), 'embedding': tf.keras.layers.serialize(self.layer_embedding) }
+  value.assign(tf.divide(value, factor))
+
+  return value.numpy()
 
 def run():
-
   '''
     custom training loop
   '''
-  
-  ds_train = file_pipeline('train')
 
-  ds_test = file_pipeline('test')
+  try:
 
-  ds_val = ds_test.take(15000)
+    p = subprocess.Popen( [f'tensorboard', '--logdir=tensorboard_logs', '--port=6006'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) 
 
-  ds_test = ds_test.skip(15000)
+    size_dataset = -1
 
-  ds_comments = ds_train.map(lambda cmt, _ : cmt )
+    ds_train = file_pipeline('train').take(size_dataset)
 
-  textvectorizer = TextVectorization2(ds_comments)
+    ds_test = file_pipeline('test')
+
+    ds_val = ds_test.take(15000)
+
+    ds_test = ds_test.skip(15000)  
+
+    ds_comments = ds_train.map(lambda cmt, _ : cmt )
+
+    textvectorizer = TextVectorization2(ds_comments)
+
+    embedding = Embedding2(textvectorizer.vocabulary_size() + 2  , 10)  
     
-  embedding = Embedding2(input_dim = textvectorizer.vocabulary_size() + 2  , output_dim = 8)  
-  
-  epochs = tf.constant(5)
+    epochs = tf.constant(100)
 
-  batch_size = tf.constant(32, dtype=tf.int64)
+    batch_size = 8
 
-  optimizer = tf.keras.optimizers.SGD( learning_rate = 0.010 )
+    mean_loss = tf.keras.metrics.Mean() 
 
-  mean_loss = tf.keras.metrics.Mean()
+    best_loss = tf.Variable(0, dtype=tf.float32)
 
-  best_loss = tf.Variable(0, dtype=tf.float32)
+    model = build_model(textvectorizer, embedding)
 
-  model = build_model(textvectorizer, embedding)
-  
-  writer = tf.summary.create_file_writer(os.path.join(os.getcwd(), 'tensorboard_logs'))
+    # model = tf.keras.models.load_model('reviews.keras_verion2.keras')
+    
+    ds_train_batch = ds_train.batch(batch_size, drop_remainder = True) 
 
-  with writer.as_default():
+    ds_val_batch = ds_val.batch(batch_size, drop_remainder = True)
 
-    for epoch in tf.range(1,epochs +1):
+    ds_test_batch = ds_test.batch(batch_size, drop_remainder = True)
+    
+    writer = tf.summary.create_file_writer(os.path.join(os.getcwd(), 'tensorboard_logs'))
 
-      for step, (x_batch, y_batch) in tf.data.Dataset.enumerate(ds_train.shuffle(buffer_size=ds_train.cardinality()).batch(batch_size)):
+    with writer.as_default():
+
+      for epoch in tf.range(1, epochs + 1):
         
-        with tf.GradientTape() as tape:
+        print('---- TRAINING ------')
+
+        lr = keras_lr_scheduler(epoch, 0.021, s=300)
+
+        print('\r LEARNING_RATE', lr)
+
+        optimizer = tf.keras.optimizers.SGD(learning_rate=lr, clipvalue=250)
+
+        for step, (x_batch, y_batch) in tf.data.Dataset.enumerate(ds_train_batch ):  
+
+          with tf.GradientTape() as tape:
+            
+            y_pred_batch, text_vect_aux_batch = model(x_batch, training=True)
+            
+            loss = tf.reduce_mean(tf.keras.losses.BinaryCrossentropy() (y_batch, y_pred_batch))
+
+            gradients = tape.gradient(loss, model.trainable_variables)
+            
+            optimizer.apply_gradients(zip( gradients, model.trainable_variables))
+          
+          mean_loss(loss) 
         
-          y_pred_batch, text_vect_aux_batch = model(x_batch, training=True)
+          print(f'\r EPOCH -- {epoch}  STEP -- {step}  LOSS -- {loss}', end='')
 
-          filtered_mean_aux = tf.boolean_mask(text_vect_aux_batch, text_vect_aux_batch <= 100) # filters histogram
+        print('AVG LOSS -- {}'.format(mean_loss.result()))
+
+        v = tf.Variable(0)
+        
+        for i, (x_ds_val_batch, y_ds_val_batch) in enumerate(ds_val.batch(500 )): 
+
+          y_valid_pred_batch , _ = model(x_ds_val_batch, training=False)
           
-          # zeros_count = tf.reduce_sum(tf.cast(tf.equal(filtered_mean_aux, 0), tf.int32))
+          validation_accuracy = tf.keras.metrics.BinaryAccuracy()(y_ds_val_batch, y_valid_pred_batch)
 
-          # ones_count = tf.math.count_nonzero(filtered_mean_aux)
+          tf.summary.scalar('Validation Accuracy', validation_accuracy, step = i + 1)
 
-          tf.summary.histogram('Text-Vectorize0', filtered_mean_aux, step = step)
+          print('\r---- VALIDATION SET ACCURACY {} ', validation_accuracy, end='\n\n\n')
 
-          loss = tf.reduce_mean(tf.keras.losses.BinaryCrossentropy() (y_batch, y_pred_batch))
+          v.assign( validation_accuracy + v)
 
-          gradients = tape.gradient(loss, model.trainable_variables)
-          
-          optimizer.apply_gradients(zip( gradients, model.trainable_variables))
+        v.assign( v / tf.constant(30))
+        
+        if best_loss < v:
 
-        mean_loss(loss) 
-      
-        print(f'\r EPOCH -- {epoch}  STEP -- {step}  LOSS -- {loss}', end='')
+          model.save('reviews.keras_verion2.keras')
 
-      print('AVG LOSS -- {}'.format(mean_loss.result()))
+          best_loss.assign(v)
+        
+        mean_loss.reset_state() 
+  
+  except :
 
-      print('EVALUATE VALIDATION SET   {} ', model.evaluate(ds_val))
+    pass 
 
-      if best_loss < mean_loss.result():
+  finally:
 
-        model.save('reviews.keras')
-
-        best_loss.assign = mean_loss.result()
-
+    p.terminate()
+    
+    p.wait()
 
 if __name__ == '__main__':
 
