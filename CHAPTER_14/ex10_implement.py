@@ -19,7 +19,58 @@ def show_class_numbers(mnist_train):
 
   print(histo)
 
-# DATASET WITH at least 1000 images per class
+
+def expander(ds: tf.data.Dataset, repeat_f = 10):
+
+  # window 32 items ( one window per item )
+
+  length = len(ds)
+
+  if repeat_f <=1:
+    length
+
+  ds = ds.window(1, shift=1, drop_remainder=True) # window 5 images
+
+  ds = ds.repeat(repeat_f)
+
+  ds = tf.data.Dataset.zip(ds, tf.data.Dataset.range(len(ds)))
+
+  ds = tf.data.Dataset.range(length).map(  lambda window_id:
+
+                                       ds.filter(lambda window, id: tf.math.mod(id , length) == window_id    )  )
+
+  ds = ds.flat_map(lambda x: x)
+
+  ds = ds.map(lambda xy,iden : xy)
+
+  ds = ds.flat_map(lambda X, Y: tf.data.Dataset.zip ( X, Y ))
+
+  return ds , length * repeat_f
+
+def augmenter(ds: tf.data.Dataset, length ):
+
+  ids = tf.data.Dataset.range(length)
+
+  ds = ds.flat_map(lambda x, y:  tf.data.Dataset.zip( tf.data.Dataset.from_tensors(x), tf.data.Dataset.from_tensors(y) , ids)  ) # flatten and zip
+
+  ds = ds.map( lambda x, y, id :  ( (augment_image(x), y) if id % 10 == 0  else  (augment_image(x), y) )   )
+
+  return ds
+
+def augment_image(image):
+
+  image = tf.cond(tf.random.normal(shape=()) > 0.2, lambda: tf.pad(image, [[10,0], [10,0], [0,0]] )[ 0:28, 0:28, : ] , lambda: image)
+
+  image = tf.cond(tf.random.normal(shape=()) > 0.2, lambda: tf.image.rot90(image) , lambda: image)
+
+  image = tf.cond(tf.random.normal(shape=()) > 0.2, lambda: tf.image.flip_left_right(image) , lambda: image)
+
+  image = tf.cond(tf.random.normal(shape=()) > 0.2, lambda: tf.image.random_brightness(image, 0.4) , lambda: image)
+
+  return image
+
+
+# DATASET (least 1000 images per class. )
 
 dataset = tfds.load(name='mnist')
 
@@ -31,123 +82,29 @@ mnist_test = mnist_test.map(lambda record: (record['image'], record['label'] ))
 
 mnist_val = mnist_train.skip(50000).cache().batch(32, drop_remainder= True)
 
-# show_class_numbers(mnist_train)
-
-mnist_train = mnist_train.take(1000)#.batch(32).cache()
+mnist_train = mnist_train.take(50000)
 
 # mnist_train = mnist_train.batch(32, drop_remainder= True) #.prefetch(tf.data.experimental.AUTOTUNE)
 
-# CUSTOM INPUT
 
-class PREPROCESSING(tf.keras.layers.Layer):
+# PREPROCESSING 
 
-  def __init__(self, channel_first = False, **kwargs):
+normalization = tf.keras.layers.Normalization()
 
-    self.channel_first = channel_first
+normalization.adapt(mnist_train.take(10000).map(lambda X, Y: X))
 
-    super().__init__(**kwargs)
+mnist_train, length = expander(mnist_train)
 
-  # @tf.function # AutoGraph convert if else statements to tf.cond within graph
-  def augment_image(self, image):
+mnist_train = augmenter(mnist_train, length)
 
-    image = tf.cond(tf.random.normal(shape=()) > 0.5, lambda: tf.pad(image, [[10,0], [10,0], [0,0]] )[ 0:28, 0:28, : ] , lambda: image)
+mnist_train = mnist_train.batch(32, drop_remainder= True).prefetch(tf.data.experimental.AUTOTUNE)
 
-    image = tf.cond(tf.random.normal(shape=()) > 0.5, lambda: tf.image.rot90(image) , lambda: image)
-
-    image = tf.cond(tf.random.normal(shape=()) > 0.5, lambda: tf.image.flip_left_right(image) , lambda: image)
-
-    image = tf.cond(tf.random.normal(shape=()) > 0.5, lambda: tf.image.random_brightness(image, 0.4) , lambda: image)
-
-    return image
-
-  def call(self, X):
-
-    # CAST
-
-    X = tf.cast(X, tf.int32)
-
-    # NORMALIZE
-
-    X = X / tf.reduce_max(X)
-
-    # ADD AUGMENTED IMAGES
-
-    additional_images = tf.map_fn(self.augment_image, X)
-
-    X = tf.concat((X, additional_images), axis=0)
-
-    return X
-
-  def build(self, batch_input_shape):
-
-    self.batch_count = batch_input_shape[0]
-
-    return super().build(batch_input_shape)
-
-  def compute_output_shape(self, batch_input_shape):
-
-    array = tf.Variable(tf.ones(shape=(len(batch_input_shape))))
-
-    array[0].assign(2)
-
-    return batch_input_shape
-
-    return tf.multiply(batch_input_shape, array)
-
-    batch_input_shape = tf.multiply(batch_input_shape, array)
-
-
-  def get_config(self):
-
-    return super().get_config()
-
-# PREPROCESSING EXPANDER 
-
-def expander(ds: tf.data.Dataset, repeat_f = 10):
-
-  # window 32 items ( one window per item )
-
-  length = len(ds)
-
-  ds = ds.window(1, shift=1, drop_remainder=True) # window 5 images
-
-  ds = ds.repeat(repeat_f) 
-  
-  ds = tf.data.Dataset.zip(ds, tf.data.Dataset.range(len(ds)))
-
-  ds = tf.data.Dataset.range(length).map(  lambda window_id: 
-                                       
-                                       ds.filter(lambda window, id: tf.math.mod(id , length) == window_id    )  )
-
-  ds = ds.flat_map(lambda x: x)
-
-  ds = ds.map(lambda xy,iden : xy) 
-  
-  ds = ds.flat_map(lambda X, Y: tf.data.Dataset.zip ( X, Y ))
-
-  return ds 
-
-# PREPROCESSING IMAGE AUGMENT
-
-def augmenter(ds: tf.data.Dataset, repeat_f = 10):
-
-mnist_train = expander(mnist_train)
-# mnist_train = mnist_train.map(expander)
-
-# count = 0
-
-for x,y in mnist_train.batch(32):
-
-  print(x, y)
-  assert(0)
-
-assert(0)
 
 # MODEL
 
 z = ii = tf.keras.layers.Input(shape=(28,28,1,))
 
-z = PREPROCESSING(channel_first=False)(z)
+z = normalization(z)
 
 z = tf.keras.layers.Flatten()(z)
 
@@ -159,5 +116,5 @@ model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001), loss=tf.k
 
 model.fit(mnist_train, epochs=10)
 
-# model.evaluate(mnist_test)
+model.evaluate(mnist_test)
 
