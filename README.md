@@ -18,13 +18,13 @@
 |  11   | Training Deep Neural Networks |
 |  12   | Custom Models |
 |  13   | Loading, Preprocessing Data  * |
-|  14   | Computer Vision Using Convolutional Neural Network   |
+|  14   | Computer Vision Using Convolutional Neural Network  *  |
 |  15   | Processing Sequences using RNN and CNN   |
 |  16   | Natural Language Processing   |
 |  17   | Generative Learning w/ Autoencoders|
 |  18   | Reinforcement Learning|
 |  19   | Training and Deploying Tensorflow|
 
-  \* - updated 
+  \* - updated recently
 
 ![Styletransfer](https://github.com/hectwilliams/Machine_Learning_Scikit_Learn/blob/main/CHAPTER_14/exercise_11_StyleTransferExample.png?raw=true)
