@@ -1,3 +1,11 @@
+'''
+  
+  Transfer learning (using xception model) to train mnist 
+
+'''
+
+
+
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
@@ -38,7 +46,6 @@ def expander(ds: tf.data.Dataset, repeat_f = 10):
   ds = tf.data.Dataset.range(length).map(  lambda window_id:
 
                                        ds.filter(lambda window, id: tf.math.mod(id , length) == window_id    )  )
-
   ds = ds.flat_map(lambda x: x)
 
   ds = ds.map(lambda xy,iden : xy)
@@ -69,8 +76,23 @@ def augment_image(image):
 
   return image
 
+def preprocess_xception(X, Y):
 
-# DATASET (least 1000 images per class. )
+  X_resize = tf.image.resize(X, (224,224))
+
+  X_resize = tf.keras.applications.xception.preprocess_input(X_resize)
+    
+  return X_resize, Y
+
+def preprocess_check(X, Y):
+
+  if tf.shape(X)[-1] == 1:
+    
+    X = tf.image.grayscale_to_rgb(X)
+
+  return X, Y 
+
+# * DATASET * (least 1000 images per class. )
 
 dataset = tfds.load(name='mnist')
 
@@ -80,41 +102,69 @@ mnist_train = mnist_train.map(lambda record: (record['image'], record['label'] )
 
 mnist_test = mnist_test.map(lambda record: (record['image'], record['label'] ))
 
-mnist_val = mnist_train.skip(50000).cache().batch(32, drop_remainder= True)
+mnist_val = mnist_train.skip(50000)
 
 mnist_train = mnist_train.take(50000)
 
-# mnist_train = mnist_train.batch(32, drop_remainder= True) #.prefetch(tf.data.experimental.AUTOTUNE)
+# * PREPROCESSING *
 
+mnist_test = mnist_test.map(preprocess_xception)
 
-# PREPROCESSING 
-
-normalization = tf.keras.layers.Normalization()
-
-normalization.adapt(mnist_train.take(10000).map(lambda X, Y: X))
+mnist_val = mnist_val.map(preprocess_xception)
 
 mnist_train, length = expander(mnist_train)
 
 mnist_train = augmenter(mnist_train, length)
 
+mnist_train = mnist_train.map(preprocess_xception)
+
+mnist_train = mnist_train.map(preprocess_check)
+
+mnist_val = mnist_val.map(preprocess_check)
+
+mnist_test = mnist_test.map(preprocess_check)
+
 mnist_train = mnist_train.batch(32, drop_remainder= True).prefetch(tf.data.experimental.AUTOTUNE)
 
+mnist_test = mnist_test.batch(32, drop_remainder= True).prefetch(tf.data.experimental.AUTOTUNE)
 
-# MODEL
+mnist_val = mnist_val.batch(32, drop_remainder= True).prefetch(tf.data.experimental.AUTOTUNE)
 
-z = ii = tf.keras.layers.Input(shape=(28,28,1,))
+# * MODEL *
 
-z = normalization(z)
+base_model = tf.keras.applications.xception.Xception(weights='imagenet', include_top=False)
 
-z = tf.keras.layers.Flatten()(z)
+global_average_layer = tf.keras.layers.GlobalAveragePooling2D()(base_model.output)
 
-oo = tf.keras.layers.Dense(10, activation=tf.keras.layers.Softmax())(z)
+prediction_layer = tf.keras.layers.Dense(units=10, activation='softmax') (global_average_layer)
 
-model = tf.keras.Model(inputs=[ii], outputs=[oo])
+model = tf.keras.Model(inputs=base_model.input, outputs = prediction_layer)
 
-model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001), loss=tf.keras.losses.SparseCategoricalCrossentropy(), metrics= [tf.keras.metrics.SparseCategoricalAccuracy()])
+# freeze model 
 
-model.fit(mnist_train, epochs=10)
+for layer in base_model.layers:
+
+  layer.trainable = False 
+
+model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.03), loss=tf.keras.losses.SparseCategoricalCrossentropy(), metrics= [tf.keras.metrics.SparseCategoricalAccuracy()])
+
+history = model.fit(mnist_train, epochs=10, validation_data=mnist_val)
 
 model.evaluate(mnist_test)
+
+# unfreeze model 
+
+for layer in base_model.layers:
+
+  layer.trainable = True
+
+model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), loss=tf.keras.losses.SparseCategoricalCrossentropy(), metrics= [tf.keras.metrics.SparseCategoricalAccuracy()])
+
+history = model.fit(mnist_train, epochs=10)
+
+# evaluate 
+
+model.evaluate(mnist_test)
+
+
 

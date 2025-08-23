@@ -1,8 +1,21 @@
 
+'''
+
+  Implement a custom convolutional layer 
+
+  Note: 
+  
+    - The solution is not optimal!
+
+    - Training, validation, and test batch size must be equal ( tf-function auto-graph requires a static-generic interface )
+
+'''
+
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow_datasets as tfds
+import time 
 
 class customCNN(tf.keras.Layer):
 
@@ -163,10 +176,10 @@ class customCNN(tf.keras.Layer):
     # Possible kernel subfields windows (ranges)
 
     h_starts = tf.map_fn(lambda ele : ele[0] * self.stride_h ,  self.ij )
-    h_ends = h_starts +  self.kernel_h
+    h_ends = h_starts +  self.kernel_h 
 
     w_starts = tf.map_fn(lambda ele : ele[1] * self.stride_w,  self.ij )
-    w_ends = w_starts +  self.kernel_w
+    w_ends = w_starts +  self.kernel_w 
 
     h = tf.transpose(tf.concat((h_starts[None, ... ], h_ends[None, ... ]), axis=0))
     w = tf.transpose(tf.concat((w_starts[None, ... ], w_ends[None, ... ]), axis=0))
@@ -282,7 +295,7 @@ class customCNN(tf.keras.Layer):
             (
               # kernel mult input sub-block
 
-              tf.multiply(self.kernel[channel_id], image [ : , field_record[0] : field_record[1] , field_record[2] : field_record[3]] )
+              tf.multiply(self.kernel[channel_id], image [ : , field_record[0] : field_record[1]  , field_record[2] : field_record[3]] )
 
               if self.channel_first else
 
@@ -315,7 +328,10 @@ class customCNN(tf.keras.Layer):
             'channel_first': self.channel_first,
             'activation': tf.keras.activations.serialize(self.activation)}
 
-# TRAINING DATA
+BATCH_SIZE = 8
+
+# # TRAINING DATA
+
 dataset = tfds.load(name='mnist')
 
 mnist_train, mnist_test = dataset['train'], dataset['test'] # dataset houses list of dicts
@@ -324,13 +340,18 @@ mnist_train = mnist_train.map(lambda record: (record['image'], record['label'] )
 
 mnist_test = mnist_test.map(lambda record: (record['image'], record['label'] ))
 
-mnist_val = mnist_train.skip(50000).cache().batch(32, drop_remainder= True)
+mnist_val = mnist_train.skip(50000) #.cache().batch(32, drop_remainder= True)
 
-mnist_train = mnist_train.take(100).cache().batch(32, drop_remainder= True).prefetch(tf.data.experimental.AUTOTUNE)
+mnist_train = mnist_train.take(50000) #.cache().batch(32, drop_remainder= True).prefetch(tf.data.experimental.AUTOTUNE)
 
-# mnist_test =  mnist_test.batch(32, drop_remainder= True)
+mnist_test =  mnist_test.batch(BATCH_SIZE, drop_remainder= True)
 
-# BUILD MODEL
+mnist_train = mnist_train.cache().batch(BATCH_SIZE, drop_remainder= True)
+
+mnist_val = mnist_val.take(8000).batch(BATCH_SIZE, drop_remainder= True) 
+
+# # BUILD MODEL
+
 z = ii = tf.keras.layers.Input(shape=(28,28,1,))
 
 z = tf.keras.layers.Lambda(lambda x: tf.cast(x/255.0, tf.float32))(z)
@@ -346,13 +367,140 @@ oo = tf.keras.layers.Dense(10, activation=tf.keras.layers.Softmax())(z)
 model = tf.keras.Model(inputs=[ii], outputs=[oo])
 
 
-model.compile (loss= tf.keras.losses.SparseCategoricalCrossentropy(), optimizer=tf.keras.optimizers.SGD(learning_rate=0.0034) )
+@tf.function
+def custom_training(n_epochs, mnist_train, n_steps_train, optimizer, loss_fn, mean_train_loss, mean_train_accuracy, mnist_val , n_steps_val, mean_val_loss, mean_val_accuracy, train_loss_history, val_loss_history, train_accuracy_history, val_accuracy_history):
 
-# TRAIN
+  '''
 
-model.fit(mnist_train, epochs=10)
+    Custom training loop , with validation. Compiling and fit methods are not used; those processes are replaced by this function.
 
-# EVALUATE
+    Args:
 
-# model.evaluate(mnist_test)
+    n_epochs - number of epochs 
+
+    mnist_train - batched training set 
+
+    n_step_train - number of batched elements in mnist_train variable 
+
+    optimizer - Nadam search algorithm
+
+    loss_fn - sparse categorical crossentropy loss 
+
+    mean_train_loss - mean loss variable 
+
+    mean_train_accuracy - training set sparse categorical accuracy 
+
+    mnist_val - batched validation set 
+
+    n_steps_val - number of batched elements in mnist_val variable 
+
+    mean_val_loss - mean validation loss  
+
+    mean_val_accuracy - validation set sparse categorical accuracy 
+    
+    train_loss_history - training loss history 
+
+    val_loss_history - validation loss history 
+
+    train_accuracy_history - training accuracy history 
+
+    val_accuracy_history - validation accuracy history
+
+
+  '''
+  for epoch in tf.range(n_epochs):
+    
+    # training set
+    for step in tf.range(n_steps_train):
+
+      X_batch, y_batch = next(iter(mnist_train))  
+      
+      with tf.GradientTape() as tape:
+        
+        y_pred = model(X_batch, training =True)  # predict (returns tensor tuple)
+        
+        main_training_loss = tf.reduce_mean(loss_fn(y_batch, y_pred))
+
+        gradients = tape.gradient(main_training_loss, model.trainable_variables)
+
+        optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+        
+      mean_train_loss(main_training_loss)
+        
+      mean_train_accuracy.update_state(y_batch, y_pred)
+    
+    # validation set
+
+    for step  in tf.range(n_steps_val) :
+
+      X_val_batch, y_val_batch = next(iter(mnist_val)) 
+
+      y_pred_val = model( X_val_batch, training=False )   # predict (returns tensor tuple)
+
+      val_training_loss = tf.reduce_mean(loss_fn(y_val_batch, y_pred_val ))
+
+      mean_val_loss(val_training_loss)
+
+      mean_val_accuracy.update_state(y_val_batch, y_pred_val)
+
+    # store avg loss/metrics per epoch 
+
+    train_loss_history.scatter_nd_update(indices=[[epoch]], updates=[mean_train_loss.result()])
+
+    val_loss_history.scatter_nd_update(indices=[[epoch]], updates=[mean_val_loss.result()])
+
+    train_accuracy_history.scatter_nd_update(indices=[[epoch]], updates=[mean_train_accuracy.result()])
+
+    val_accuracy_history.scatter_nd_update(indices=[[epoch]], updates=[mean_val_accuracy.result()])
+
+    # clear loss/metrics variables 
+
+    mean_train_loss.reset_state()
+
+    mean_val_loss.reset_state()
+
+    mean_train_accuracy.reset_state()
+
+    mean_val_accuracy.reset_state()
+
+n_epochs = 1
+
+n_steps = 1
+
+n_steps_train = len(mnist_train) 
+
+optimizer = tf.keras.optimizers.Nadam(learning_rate=0.0034)
+
+loss_fn = tf.keras.losses.SparseCategoricalCrossentropy()
+
+loss_val_fn = tf.keras.losses.SparseCategoricalCrossentropy()
+
+mean_train_loss = tf.keras.metrics.Mean()
+
+mean_train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy() 
+
+n_steps_val = len(mnist_val)
+
+mean_val_loss = tf.keras.metrics.Mean()
+
+mean_val_accuracy = tf.keras.metrics.SparseCategoricalAccuracy() 
+
+train_loss_history = tf.Variable(tf.zeros(n_epochs), dtype=tf.float32)
+ 
+val_loss_history = tf.Variable(tf.zeros(n_epochs), dtype=tf.float32)
+
+train_accuracy_history = tf.Variable(tf.zeros(n_epochs), dtype=tf.float32)
+ 
+val_accuracy_history = tf.Variable(tf.zeros(n_epochs), dtype=tf.float32)
+
+custom_training(n_epochs,mnist_train, n_steps_train, optimizer, loss_fn, mean_train_loss, mean_train_accuracy, mnist_val , n_steps_val, mean_val_loss, mean_val_accuracy, train_loss_history, val_loss_history, train_accuracy_history, val_accuracy_history) 
+
+
+# PRINT STATS 
+
+print( f'  Avg training loss =  {tf.reduce_mean(train_loss_history)}')
+print( f'  Avg training accuracy =  {(train_accuracy_history)}')
+
+print( f'  Avg validation loss =  {tf.reduce_mean(val_loss_history)}')
+print( f'  Avg validation accuracy =  {(val_accuracy_history)}')
 
