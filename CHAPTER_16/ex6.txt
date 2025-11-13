@@ -1,0 +1,15 @@
+What is the most important layer in the Transfomer architecture? What is its purpose?
+
+
+
+The most important layer in Transformer architecture are the Multi-Head Attention blocks.
+
+It encodes word relationsips within sentences where the output is encoded with context vector that pays attention to relevant words. 
+
+During training the model will focus attention for certain words in relation to other words in a sentence
+
+During decode, decoder pays attention to the words in the input sentence ( input to encoder ) during a query/translation at each time step. 
+
+During query(i.e. decode), the decoder accesses its 'lookup dictionary' for context vector which will support translation at each time step.  
+
+

@@ -1,0 +1,5 @@
+When would you need to use sampled softmax ?
+
+Sampled softmax is to be used when the decoder has to select from a large vocab of words to make a prediction?
+
+

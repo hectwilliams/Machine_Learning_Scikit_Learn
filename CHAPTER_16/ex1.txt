@@ -1,0 +1,18 @@
+What are the pros and cons of using a stateful RNN versus a stateless RNN?
+
+CONS:
+
+- Increased learning time 
+
+- Larger model ( state persistent and returned after each batch iteration )
+
+- Batch data must be have a contigious data flow for each batch set of words 
+
+- requires complex preprocessing , due to batch architecture 
+
+
+PROS:
+
+- Model can learn long-term patterns while learning on short sequences 
+
+- Predictions require the same batch data size used during training

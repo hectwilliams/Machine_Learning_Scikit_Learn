@@ -1,0 +1,13 @@
+What is attention mechanism? How does it help?
+
+Attention mechanism is an algorithm geared towards  making the decoder's job easier by focusing on encoded output data when 
+
+making estimations. The model would have trained to learn that a decoder's particular 'query state' relates to one or more
+
+translated inputs. This 'memory or learned construct' helps shorten the 'translation path' from encoder to decoder when making predictions. 
+
+Shorten translation path means the short-term memory limits of RNN will be mitigated.
+
+
+
+
