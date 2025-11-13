@@ -1,0 +1,6 @@
+What is beam search and why would you use it? What tool can you use to implement it?
+
+Beach search is a method to boost to prediction performance of a model by estimating the probability of the best K words available to independent models per time step.  
+
+Tensorflow Addons can implement beam search.
+

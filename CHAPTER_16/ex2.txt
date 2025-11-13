@@ -1,0 +1,10 @@
+Why do people use Encoder-Decoder RNNs rather than plain sequence to sequence RNNs for automatic translation?
+
+Encoder is isolated from decoder and the architecture is capable of performing neural machine translation.
+
+E-D can handle inputs and outputs of varying lengths. 
+
+Encoder compresses data, which the decoder can undo with an understanding of the compressed data (i.e. context vector )
+
+Usage of attention mechanisms
+

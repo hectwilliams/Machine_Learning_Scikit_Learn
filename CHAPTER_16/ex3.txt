@@ -1,0 +1,8 @@
+How can you deal with variable=-length input sequences?  
+
+Pad inputs so batch data have consistent time series lengths 
+
+What about variable-length output sequences?
+
+Use a masking layer to create essentially a passthrough for the masked time steps. 
+
