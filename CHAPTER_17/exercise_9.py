@@ -1,392 +1,763 @@
-#!/usr/bin/env python3
-'''
-    Q. Try using a denoising autoencodder to pretrain an image classifier. 
+"""
 
-    A. I will train CIFAR - 100 dataset
+Name: exercise_9.py
 
-    Q. Split dataset into training and test set. Train a deep denoising autoencoder on full training set
+Description:
 
-    -> A.  Training is on-going. Current loss = 0.0616. My target is 0.03 where the reconstruction of images is good.
+  Create denoise autoencoder. After training autoencoder, train classifer on top 500 reconstructed dataset samples(i.e images).
 
-    Q. Build a classification DNN, reusing the lower layers of the autoencoder. Train it using only 500 images from the training set. Does it perform better with or without pretraining?
+  The best 500 reconstructed images are further used to train a classifier.
 
-    A.  Pretraining helps the model converge to lower loss 
- 
-'''
+  Steps:
+
+    1) Enter a directory path in PREFIX variable 
+
+    2) Set TRAIN_MODE = 0, and run script
+
+      ** Autoencoder trained. Script will stop training when loss is acceptable ( .npy files generated)
+
+    3) Set TRAIN_MODE = 2 and run script
+
+      ** Classifier DNN trained
+
+      ** Classifier does not converge :( 
+
+"""
+
+# %load_ext tensorboard
+# %tensorboard --logdir logs/fit
+
+import tensorflow as tf
 import os
 import numpy as np
-import pickle
-import tensorflow as tf 
-import sys 
-import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
-from sklearn.manifold import TSNE 
-from matplotlib.widgets import Button, Slider
-from matplotlib.backend_bases import MouseEvent, Event
+import datetime
+import shutil
 
-# Download CFAR-100 into current working directory: see https://www.cs.toronto.edu/~kriz/cifar.html 
-# unzip cifar-100-python.tar.gz (unzipped directory should be cifar-100-python)
-DS_DIR = os.path.join(os.getcwd(), 'cifar-100-python')
-N_255 = 255.0
-N_EPOCHS = 3000
-N_EPOCHS_DNN =  3000
-BATCH_SIZE = 2
-NORMALIZE_INPUT = True 
-N_TRAINING_INSTANCES_CFAR100 = 50000
-N_INSTANCES_CLASSIFY_APPLICATION = 200
-COARSE_LABELS = [ # superclasses 
-    'aquatic mammals',
-    'fish',
-    'flowers',
-    'food container',
-    'fruit and vegetables',
-    'household electrical devices',
-    'household furniture',
-    'insects',
-    'large carnivores',
-    'large man-made outdoor things',
-    'large natural outdoor scenes',
-    'large omnivores and herbivores',
-    'medium-sized mammals',
-    'non-insect invertbrates',
-    'people',
-    'reptiles',
-    'small mammals',
-    'trees',
-    'vehicles 1',
-    'vehicles 2'
-]
-N_COARSE_LABELS = len(COARSE_LABELS)
+CREATE_RECORDS = False
+
+N_EPOCHS = 600
+
+PREFIX = '~/tmp_autoencoder/' # assume linux 
+
+CFAR_TRAIN_10 = PREFIX + 'cifar10_train.tfrecord'
+
+CFAR_TEST_10 = PREFIX + 'cifar10_test.tfrecord'
+
+WEIGHTS_FILENAME = PREFIX + 'autoencoder.weights.h5'
+
+WEIGHTS_FILENAME_NO_PRETRAIN = PREFIX + 'autoencoder_non_pretrain.weights.h5'
+
+WEIGHTS_FILENAME_PRETRAIN = PREFIX + 'autoencoder_pretrain.weights.h5'
+
+WEIGHTS_FILENAME_PRETRAIN_GOLD = PREFIX + 'gold_autoencoder.weights.h5'
+
+TOP_IMAGES = PREFIX + 'top_imagesx'
+
+TOP_INDICES = PREFIX + 'top_indice'
+
+TOP_LABELS = PREFIX + 'top_labels'
+
+USE_GOLD_PRETRAIN = True
+
+MODEL_FILENAME = 'autoencoder.keras'
+
+LOG_DIR = 'logs/fit/' + datetime.datetime.now().strftime("%Y%m%d-%H:%M:%S")
+
+BATCH_SIZE = 4
+
+INFER = False
+
+TRAIN_MODE = 2 #- autoencoder, 1 - non pretrained model, 2 - pretrained model
+
+LEARNING_RATE =  0.000116014 if TRAIN_MODE == 2 else  0.00061100116014
+
+LEARNING_DECAY_STEPS = 10000
+
+LEARNING_DECAY_RATE = 0.94
+
+REPEAT = 4
+
+CFAR_SIZE = 10
+
+DEPTHS =  [1, 1, 1 , 1, 1, 1, 1]
+
+USE_PRETRAIN_LAYER = True
+
+DROPOUT_RATE = 0.7
+
+DEEP_DN = 2
+
+CODING_SHAPE = (4,4,256)
+
+CODING_SIZE = CODING_SHAPE[0] * CODING_SHAPE[1] * CODING_SHAPE[2]
 
 def unpickle(file):
-    with open(file, 'rb') as fo:
-        dict = pickle.load(fo, encoding='bytes')
-    return dict
+  import pickle
+  with open(file, 'rb') as fo:
+      dict = pickle.load(fo, encoding='bytes')
+  return dict
 
-def process_serialize_img_data(serialize_data_norm):
-    xplit = np.array_split( tf.cast(serialize_data_norm  * (tf.constant(1.0,dtype=tf.float32) if  NORMALIZE_INPUT else 1.0) , tf.float32), 3)
-    d = np.array(list(zip(*xplit)))
-    d = np.reshape(d, (32,32,3))
-    return d
+def serial_to_rbg(serial):
+  red = serial[:1024]
+  green = serial[1024:2048]
+  blue = serial[2048:]
+  red = red.reshape(32,32) / 255.0
+  green = green.reshape(32,32) / 255.0
+  blue = blue.reshape(32,32) / 255.0
+  return np.dstack((red, green, blue))
 
-def images_by_super_class_tensor(coarse_labels_id, fine_labels_id, data_train ):
-    numpy_coarse_labels = np.array(data_train[b'coarse_labels'])
-    numpy_data = np.array(data_train[b'data'])
-    numpy_fine_labels = np.array(data_train[b'fine_labels'])
+class Encoder(tf.keras.Model):
 
-    indices = np.argwhere(np.where( (numpy_fine_labels == fine_labels_id) * (numpy_coarse_labels == coarse_labels_id) , 1, 0))
-    images = numpy_data[indices]
-    ds = tf.data.Dataset.from_tensor_slices(images).map(lambda x: x[0] )
-    if NORMALIZE_INPUT:
-        ds = ds.map(lambda x: tf.cast(x,dtype=tf.float32) / N_255) # normalize pixels 
-    return ds
+  def __init__(self, **kwargs):
 
-def images_train_to_dataset(data):
-    ds = tf.data.Dataset.from_tensor_slices(np.array(data[b'data']))
-    if NORMALIZE_INPUT:
-        ds = ds.map(lambda x: tf.cast(x,dtype=tf.float32) / N_255) # normalize pixels 
-    return ds
+    super().__init__(**kwargs)
 
-def images_train_to_dataset_with_label(data):
-    ds = tf.data.Dataset.from_tensor_slices(np.array(data[b'data']))
-    labels_ds = tf.data.Dataset.from_tensor_slices(np.array(data[b'coarse_labels']))
-    if NORMALIZE_INPUT:
-        ds = ds.map(lambda x: tf.cast(x,dtype=tf.float32) / N_255) # normalize pixels 
-    return tf.data.Dataset.zip((ds), (labels_ds))
+    self.conv2D_INIT = tf.keras.layers.Conv2D(64, 2, activation='selu', padding='SAME', kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32))
 
-def exponential_decay(lr0:float, s:int):
-    def exponential_decay_function(epoch):
-        return lr0 * 0.1**(epoch/s)
-    return exponential_decay_function
+    self.conv2D_16s = [tf.keras.layers.Conv2D(32, 3, activation='selu', padding='SAME', kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32)) for i in range(DEPTHS[0])]
 
-def power_scheduling(lr0: float, s:int, c:float):
-    def power_scheduling_function(epoch):
-        return lr0/(1 + (epoch/s))**c
-    return power_scheduling_function
+    self.conv2D_32s = [tf.keras.layers.Conv2D(32, 3, activation='selu', padding='SAME', kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32)) for i in range(DEPTHS[1])]
 
-class SaveModelsCallback(tf.keras.callbacks.Callback):
-    def __init__(self, decoder, encoder):
-        self.decoder = decoder 
-        self.encoder = encoder 
-        super().__init__()
-    def on_epoch_end(self, epoch, logs):
-        self.decoder.save(os.path.join(os.getcwd(), 'ex9_dropout_decoder.keras'))
-        self.encoder.save(os.path.join(os.getcwd(), 'ex9_dropout_encoder.keras'))
+    self.conv2D_64s = [tf.keras.layers.Conv2D(64, 3, activation='selu', padding='SAME', kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32)) for i in range(DEPTHS[2])]
 
-@tf.keras.utils.register_keras_serializable(package="HtronLayers")
-class AddDenseBlock(tf.keras.Layer):
-    def __init__(self, n_neurons,n_layers,**kwargs):
-        super().__init__(**kwargs)
-        self.n_neurons = n_neurons
-        self.n_layers = n_layers
-        self.hidden = [tf.keras.layers.Dense(n_neurons, activation='elu') for _ in range(n_layers) ]
-    def call(self, inputs):
-        Z = inputs 
-        for layer in self.hidden:
-            Z = layer(Z)
-        return inputs + Z 
-    # def get_config(self):
-    #     base_config = super().get_config() 
-    #     return { **base_config, "hidden": self.hidden, "n_neurons": self.n_neurons, "n_layers": self.n_layers}
+    self.conv2D_128s = [tf.keras.layers.Conv2D(128, 3, activation='selu', padding='SAME', kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32)) for i in range(DEPTHS[3])]
 
-def reset_click_handler(event: Event, obj):
-    obj[0] = 0
-    pass
+    self.conv2D_256s = [tf.keras.layers.Conv2D(256, 3, activation='selu', padding='SAME', kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32)) for i in range(DEPTHS[4])]
 
-def button_handler(event: Event, obj, axes_img, axes_target_label, axes_estimate_label, codings, coding_labels, limit, step):
-    
-    # update shared index value
-    current_index = obj[0]
+    # self.conv2D_512s = [tf.keras.layers.Conv2D(512, 3, activation='selu', padding='SAME', kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32)) for i in range(DEPTHS[5])]
 
-    if current_index == 0 and step == -1:
-        current_index = limit
-    
-    if current_index == limit - 1 and step == 1:
-        current_index = -1
+    # self.codings = tf.keras.layers.Dense(CODING_SIZE, activation='selu', kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32))
 
-    current_index = current_index + step 
-    
-    obj[0] = current_index
-    
-    # update axes 
-    axes_img.cla()
-    axes_target_label.cla()
-    axes_estimate_label.cla()
+    self.max_pooling2D = tf.keras.layers.MaxPool2D(2)
 
-    coding = codings[current_index]
-    img = process_serialize_img_data(coding)
+    self.add_guassian_noise_layer = tf.keras.layers.Lambda(lambda x: tf.random.normal(shape=( 32, 32, 3), stddev=0.3,  seed=32, ) + x)
 
-    axes_img.imshow(img)
-    label_index = coding_labels[current_index]  
-    label = COARSE_LABELS[label_index]
+    self.glayer = tf.keras.layers.GaussianNoise(stddev=0.2, seed=32)
 
-    load_sample(axes_img, axes_target_label, axes_estimate_label, coding, label)
+    self.flatten = tf.keras.layers.Flatten()
 
-    # add update task to gui event loop
-    event.canvas.draw_idle()
+    self.reg = tf.keras.layers.ActivityRegularization(l1=1e-3)
 
-def load_sample(axes_img, axes_target, axes_estimate, coding, label):
-    
-    for ax in [axes_img, axes_target, axes_estimate ]:
-        ax.set_axis_off()
-        ax.set(xticklabels=[])
-        ax.set(yticklabels=[])
+    self.global_avg = tf.keras.layers.GlobalAveragePooling2D()
 
-    img = process_serialize_img_data(coding)
-    axes_img.imshow(img)
+  def call(self, x):
 
-    axes_target.text(0.5, 0.5, label, horizontalalignment='center', verticalalignment='center', transform=axes_target.transAxes, fontsize=8)
+    x = self.glayer(x)
 
-    estimate_label = COARSE_LABELS[tf.math.argmax(dnn_classifier_model.predict(coding[tf.newaxis,...]), axis=1)[0]]    
+    x = self.conv2D_INIT(x)
 
-    match_found = estimate_label == label
-    if not match_found:
-        # add strikethrough to each text character
-        str_buffer = ''
-        for c in estimate_label:
-            str_buffer += c + '\u0336'
-        estimate_label = str_buffer
+    for layer in self.conv2D_16s :
 
-    axes_estimate.text(0.5, 0.5, estimate_label, horizontalalignment='center', verticalalignment='center', transform=axes_estimate.transAxes, fontsize=8,  bbox=dict(facecolor='none', edgecolor='green' if match_found else 'red', boxstyle='round') )
+      x = layer(x)
 
-train_file = os.path.join(DS_DIR, 'train')
-test_file = os.path.join(DS_DIR, 'test')
+    for layer in self.conv2D_32s :
 
-data_train = unpickle(train_file)
-data_test = unpickle(test_file)
+      x = layer(x)
+
+    for layer in self.conv2D_64s :
+
+      x = layer(x)
+
+    x = self.max_pooling2D(x) # 16 x 16
+
+    for layer in self.conv2D_128s :
+
+      x = layer(x)
+
+    x = self.max_pooling2D(x) # 8 x 8 x 128
+
+    for layer in self.conv2D_256s :
+
+      x = layer(x)
+
+    x = self.max_pooling2D(x) # 4 x 4 x 256
+
+    x = self.flatten(x) # CODING_SIZE
+
+    x = self.reg(x) # L1 Regularizer
+
+    return x
+
+  def get_config(self):
+
+    base_config = super().get_config()
+
+    return {
+
+        **base_config,
+
+      }
+
+class Decoder(tf.keras.Model):
+
+  def __init__(self, **kwargs):
+
+    super().__init__(**kwargs)
+
+    self.reshape = tf.keras.layers.Reshape(CODING_SHAPE)
+
+    self.transpose_conv2D_512 = tf.keras.layers.Conv2DTranspose(512, 3, activation='selu', strides = 1, padding='SAME', kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32))
+
+    self.transpose_conv2D_256 = tf.keras.layers.Conv2DTranspose(256, 3, activation='selu', strides = 1, padding='SAME', kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32))
+
+    self.transpose_conv2D_128 = tf.keras.layers.Conv2DTranspose(128, 3, activation='selu', strides = 2, padding='SAME', kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32))
+
+    self.transpose_conv2D_64 = tf.keras.layers.Conv2DTranspose(64, 3, activation='selu', strides = 1, padding='SAME', kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32))
+
+    self.transpose_conv2D_32 = tf.keras.layers.Conv2DTranspose(32, 3, activation='selu', strides = 1, padding='SAME', kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32))
+
+    self.transpose_conv2D_16 = tf.keras.layers.Conv2DTranspose(16, 3, activation='selu', strides = 1, padding='SAME', kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32))
+
+    self.transpose_conv2D_8 = tf.keras.layers.Conv2DTranspose(8, 3, activation='selu', strides = 2, padding='SAME', kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32))
+
+    self.transpose_conv2D_4 = tf.keras.layers.Conv2DTranspose(4, 3, activation='selu', strides = 1, padding='SAME', kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32))
+
+    self.transpose_conv2D_3 = tf.keras.layers.Conv2DTranspose(3, 3, activation='sigmoid', strides = 2, padding='SAME', dtype=tf.float64, kernel_initializer= tf.keras.initializers.GlorotUniform(seed=32))
 
 
-batch_label = data_train[b'batch_label']
-ds_coarse_labels = tf.data.Dataset.from_tensor_slices(data_train[b'coarse_labels'])
-ds_fine_labels = tf.data.Dataset.from_tensor_slices(data_train[b'fine_labels'])
-ds_images = tf.data.Dataset.from_tensor_slices(data_train[b'data'])
+  def call(self, x):
 
-train_fish_fish_ds = images_by_super_class_tensor(1,1, data_train)
-test_fish_fish_ds = images_by_super_class_tensor(1,1, data_test)
-train_data_ds = images_train_to_dataset(data_train)
-test_data_ds = images_train_to_dataset(data_test)
+    x = self.reshape(x)
 
-ds_train_autoencoder = tf.data.Dataset.zip( (train_data_ds),(train_data_ds))
-ds_train_autoencoder = ds_train_autoencoder.batch(BATCH_SIZE).prefetch(1) 
+    # x = self.transpose_conv2D_512(x)
 
-ds_test = tf.data.Dataset.zip( (test_data_ds),(test_data_ds))
-ds_test = ds_test.batch(BATCH_SIZE).prefetch(1) 
+    # x = self.transpose_conv2D_256(x)
 
-hidden_neurons = [32, 64, 128]
-coding_size = hidden_neurons[2] * 4 * 4
+    x = self.transpose_conv2D_128(x)
 
-if sys.argv.__len__() <= 1:
-    raise ValueError('Are you training or inferring?')
-    
-if sys.argv[1] == 'train':
+    x = self.transpose_conv2D_64(x)
 
-    z_in_enc = tf.keras.layers.Input(shape=[32 * 32 * 3])
-    z = z_in_enc
-    z= tf.keras.layers.Dropout(0.3) (z)
-    z = tf.keras.layers.Reshape([32, 32, 3])(z)
-    z = tf.keras.layers.Conv2D(hidden_neurons[0], kernel_size = 3, padding='same', activation='selu'   )(z)
-    z = tf.keras.layers.MaxPool2D(pool_size=2)(z)
-    z = tf.keras.layers.Conv2D(hidden_neurons[1], kernel_size = 3, padding='same', activation='selu'  )(z)
-    z = tf.keras.layers.MaxPool2D(pool_size=2)(z)
-    z = tf.keras.layers.Conv2D(hidden_neurons[2], kernel_size = 3, padding='same', activation='selu'  )(z)
-    z = tf.keras.layers.MaxPool2D(pool_size=2)(z)
-    z = tf.keras.layers.Flatten()(z)
-    z_out = AddDenseBlock(hidden_neurons[2] * 4 * 4,3)(z)
-    dropout_encoder = tf.keras.Model(inputs=[z_in_enc], outputs=[z_out])
+    x = self.transpose_conv2D_32(x)
 
-    z_in_dec = tf.keras.layers.Input(shape= [4*4*hidden_neurons[2]]) # 32 = 2**5
-    z = z_in_dec
-    z = tf.keras.layers.Reshape([4, 4, hidden_neurons[2]])(z)
-    z = tf.keras.layers.Conv2DTranspose(hidden_neurons[1], kernel_size = 2, strides=2, padding='valid', activation='selu'  )(z)
-    z = tf.keras.layers.Conv2DTranspose(hidden_neurons[0], kernel_size = 2, strides=2, padding='same', activation='selu'  )(z)
-    z = tf.keras.layers.Conv2DTranspose(3, kernel_size = 2, strides=2, padding='same', activation='sigmoid')(z)
-    z_out = tf.keras.layers.Flatten()(z)
+    x = self.transpose_conv2D_16(x)
 
-    dropout_decoder= tf.keras.Model(inputs=[z_in_dec], outputs=[z_out])
-    codings_ = dropout_encoder(z_in_enc)
-    reconstruction_ = dropout_decoder(codings_)
-    
-    model_ae = tf.keras.Model(inputs=[z_in_enc], outputs=[reconstruction_])
+    x = self.transpose_conv2D_8(x)
 
-    model_ae.compile(loss=tf.keras.losses.MeanAbsoluteError(), optimizer=tf.keras.optimizers.SGD(momentum=0.0012, nesterov=False) ) 
+    x = self.transpose_conv2D_4(x)
 
-    model_ae.save(os.path.join(os.getcwd(), 'ex9_autoencoder.keras'))
+    x = self.transpose_conv2D_3(x)
 
-    tf.keras.utils.plot_model(model_ae, to_file=os.path.join(os.getcwd(), 'ex9_autoencoder.png'), expand_nested= True ,show_layer_names=True, show_layer_activations=True, show_trainable=True, show_shapes=True)
-    tf.keras.utils.plot_model(dropout_decoder, to_file=os.path.join(os.getcwd(), 'ex9_dropout_decoder.png'), expand_nested= True ,show_layer_names=True, show_layer_activations=True, show_trainable=True, show_shapes=True)
-    tf.keras.utils.plot_model(dropout_encoder, to_file=os.path.join(os.getcwd(), 'ex9_dropout_encoder.png'), expand_nested= True ,show_layer_names=True, show_layer_activations=True, show_trainable=True, show_shapes=True)
+    return x
 
-    history = model_ae.fit( ds_train_autoencoder, epochs=N_EPOCHS, validation_data=(ds_test), callbacks= [
-         tf.keras.callbacks.LearningRateScheduler(exponential_decay(0.500, 50))
-        # tf.keras.callbacks.LearningRateScheduler(power_scheduling(1.90, 10, 1.0))
-         , tf.keras.callbacks.TensorBoard(  os.path.join(os.path.join(os.getcwd(), 'tb_log'), '01' )),  SaveModelsCallback(dropout_decoder,dropout_encoder ) ,tf.keras.callbacks.ModelCheckpoint ( os.path.join(os.getcwd(), 'ex9_autoencoder.keras'), save_best_only=True ), tf.keras.callbacks.BackupAndRestore(os.path.join(os.getcwd(), 'ex9_backup'), save_freq='epoch', delete_checkpoint=True)] )
+  def get_config(self):
 
-elif sys.argv[1] == 'infer':
-    model_ae = tf.keras.models.load_model(os.path.join(os.getcwd(), 'ex9_autoencoder.keras'))
-    
-    dropout_decoder_ae = tf.keras.models.load_model(os.path.join(os.getcwd(), 'ex9_dropout_decoder.keras'))
+    base_config = super().get_config()
 
-    dropout_encoder_ae = tf.keras.models.load_model(os.path.join(os.getcwd(), 'ex9_dropout_encoder.keras'))
-    
-    n_images = 6
-    batch_size = 12
-    fig3 = plt.figure(3,layout='constrained')
-    fig2 = plt.figure(2,layout='constrained')
-    fig1 = plt.figure(1,layout='constrained')
-    grid_cells = gridspec.GridSpec(n_images, 8, figure=fig1, hspace=0.05, wspace=0.05)
-    test_fish_ds = images_train_to_dataset(data_test).batch(batch_size).prefetch(1)   
-    writer = tf.summary.create_file_writer(os.path.join(os.path.join(os.getcwd(), 'tb_log'), '01_writer' ))
-    
-    for x_images in test_fish_ds.take(1):
+    return {
 
-        for batch_i, x_image_serial_norm in enumerate(x_images): 
-            
-            x_image_serial_norm = tf.cast(x_image_serial_norm, tf.float32)
+        **base_config,
 
-            # RAW IMAGE
-            img = process_serialize_img_data(x_image_serial_norm )
-            
-            # RECONSTRUCTION IMAGE
-            x_image_compress_serial = dropout_encoder_ae.predict( x_image_serial_norm[tf.newaxis,...] )
-            x_image_reconstruct_serial = dropout_decoder_ae(x_image_compress_serial)
-            x_image_reconstruct_serial = tf.reshape(x_image_reconstruct_serial, (-1))[::]
+      }
 
-            ax2 = fig2.add_subplot(n_images,1,batch_i + 1)
-            ax2.scatter(np.arange(len(x_image_serial_norm)), x_image_serial_norm, c='blue', s=1, label='img')
-            ax2.scatter(np.arange(len(x_image_reconstruct_serial)), x_image_reconstruct_serial, c='red', alpha=0.8, s=1, label='img recon')
-            ax2.legend()
-            img_recon = process_serialize_img_data(x_image_reconstruct_serial)
+class ClassifierDNN (tf.keras.Model):
 
-            grid_id_left = gridspec.GridSpecFromSubplotSpec(1,1, subplot_spec=grid_cells[batch_i, 0])
-            grid_id_right = gridspec.GridSpecFromSubplotSpec(1,1, subplot_spec=grid_cells[batch_i, 1])
+  def __init__(self, enc_layer = None, dec_layer = None,  **kwargs):
 
-            ax = fig1.add_subplot(grid_id_left[0])
-            ax.imshow(img)
-            ax.set_axis_off()
+    super().__init__(**kwargs)
 
-            ax = fig1.add_subplot(grid_id_right[0])
-            ax.imshow((img_recon))
-            ax.set_axis_off()
+    self.flatten = tf.keras.layers.Flatten()
 
-            if batch_i >=n_images-1:
+    self.dense_4096s = [tf.keras.layers.Dense( 32, activation='selu', kernel_initializer=tf.keras.initializers.GlorotUniform(seed=32) ) for _ in range(DEEP_DN)]
+
+    self.dense_2048s = [tf.keras.layers.Dense( 32, activation='selu', kernel_initializer=tf.keras.initializers.GlorotUniform(seed=32) ) for _ in range(DEEP_DN)]
+
+    self.dense_1024s = [tf.keras.layers.Dense( 32, activation='selu', kernel_initializer=tf.keras.initializers.GlorotUniform(seed=32) ) for _ in range(DEEP_DN)]
+
+    self.dense_32 = tf.keras.layers.Dense( 32, activation='selu', kernel_initializer=tf.keras.initializers.GlorotUniform(seed=32) )
+
+    self.dense_32s = [tf.keras.layers.Dense( 32, activation='selu', kernel_initializer=tf.keras.initializers.GlorotUniform(seed=32) ) for _ in range(DEEP_DN)]
+
+    self.dense_10s = [tf.keras.layers.Dense( 32, activation='selu', kernel_initializer=tf.keras.initializers.GlorotUniform(seed=32) ) for _ in range(DEEP_DN)]
+
+    self.dense_10 = tf.keras.layers.Dense( CFAR_SIZE, activation='softmax')
+
+    self.enc_layer = enc_layer
+
+    self.dec_layer = dec_layer
+
+    self.global_avg_2D = tf.keras.layers.GlobalAveragePooling2D()
+
+    self.reg = tf.keras.layers.ActivityRegularization(l2=1e-3)
+
+    self.dropout = tf.keras.layers.Dropout(0.4)
+
+  def call(self, x):
+
+    if self.enc_layer:
+
+      z = self.enc_layer(x)
+
+      z = self.dec_layer(z)
+
+      z = self.global_avg_2D(z)
+
+      z = self.reg(z)
+
+      # z = self.flatten(z)
+
+    else:
+
+      z = self.flatten(x)
+
+    for index, dense_layer in enumerate(self.dense_2048s):
+
+      z = dense_layer(z)
+
+      break
+
+    for index, dense_layer in enumerate(self.dense_1024s):
+
+      z = dense_layer(z)
+
+      break
+
+    z = self.dropout(z)
+
+    z = self.dense_10(z)
+
+    return z
+
+  def get_config(self):
+
+    base_config = super().get_config()
+
+    return {
+
+        **base_config,
+
+        'enc_layer' : self.enc_layer
+
+      }
+
+
+
+class Top500ImagesCB(tf.keras.callbacks.Callback):
+
+  def __init__(self, train_dataset):
+
+    super().__init__()
+
+    self.train_dataset = train_dataset
+
+  def on_epoch_end(self, epoch, logs= None):
+
+      current_loss = logs.get("loss")
+
+      n_range = 500;
+
+      if current_loss <= 0.0050 and not os.path.exists(TOP_IMAGES + '.npy'):
+
+        top_ = [[] for i in range(n_range)]
+
+        for batch_index, (img_x, label_y) in enumerate(self.train_dataset):
+
+          recon = self.model(img_x)
+
+          mse_val_batch = tf.keras.losses.MSE( tf.reshape(recon, (BATCH_SIZE,-1) ), tf.reshape(img_x, (BATCH_SIZE,-1)) )
+
+          for list_index, mse_value in enumerate(mse_val_batch):
+
+            for k in range(n_range):
+
+              obj = top_[k]
+
+              if len(obj) and obj[2] >= mse_value:
+
+                top_ = top_[0 : k] + [[batch_index, list_index, mse_value, recon[list_index] , label_y[0]]] + top_[ k + 1 : ]
+
                 break
-            
-    plt.show()
 
-elif sys.argv[1] == 'dnn-train':
-    
-    encoder_model = tf.keras.models.load_model(os.path.join(os.getcwd(), 'ex9_dropout_encoder.keras'))
-    
-    # for layer in encoder_model.layers:
-        # layer.trainable =  False 
-    encoder_model.compile()
-    
-    z_input_dnn = tf.keras.layers.Input(shape=[32 * 32 * 3])
-    z  = encoder_model(z_input_dnn)
-    z_output_dnn = tf.keras.layers.Dense(N_COARSE_LABELS * 2, activation='relu')(z)
-    z_output_dnn = tf.keras.layers.Dense(N_COARSE_LABELS, activation='softmax')(z)
+            for k in range(n_range):
 
-    dnn_model = tf.keras.Model(inputs=[z_input_dnn], outputs=[z_output_dnn])
-    dnn_model.compile(loss='sparse_categorical_crossentropy', optimizer='sgd')    
+              if top_[k] == []:
 
-    ds_train_dnn = images_train_to_dataset_with_label(data_train).shuffle(N_TRAINING_INSTANCES_CFAR100).take(500).batch(1)
-    ds_test_dnn = images_train_to_dataset_with_label(data_test).take(1500).batch(1)
-    
-    dnn_model.fit(ds_train_dnn, validation_data=[ds_test_dnn], epochs=N_EPOCHS_DNN, callbacks=[tf.keras.callbacks.LearningRateScheduler(exponential_decay(0.00100, 100)), tf.keras.callbacks.ModelCheckpoint ( os.path.join(os.getcwd(), 'ex9_DNNClassifierPretrained.keras'), save_best_only=True ), tf.keras.callbacks.BackupAndRestore(os.path.join(os.getcwd(), 'ex9_backup_dnn_enc'), save_freq='epoch', delete_checkpoint=True)] )
+                top_[k] = [batch_index, list_index, mse_value, recon[list_index] , label_y[0] ]
 
-elif sys.argv[1] == 'dnn-infer':
+                break
 
-    # dnn_classifier_model = tf.keras.models.load_model(os.path.join(os.getcwd(), 'ex9_DNNClassifier.keras'))
-    dnn_classifier_model = tf.keras.models.load_model(os.path.join(os.getcwd(), 'ex9_DNNClassifierPretrained.keras'))
-    fig2_grid_layout = plt.figure(2,layout='tight')
-    grid_columns = 16
-    grid_rows = 16
-    grid_spec = gridspec.GridSpec(grid_rows, grid_columns, figure=fig2_grid_layout,  hspace=0.05, wspace=0.05)
-    
-    for row in range(grid_rows):
-        for col in range(1,grid_columns) :
-            ax = fig2_grid_layout.add_subplot(grid_spec[row, col])
-            ax.set_axis_off()
-            ax.set(xticklabels=[])
-            ax.set(yticklabels=[])
-            ax.tick_params(bottom=False, top=False, left=False, right=False)
-         
-    # button 1 
-    button_next_subplot_spec = gridspec.GridSpecFromSubplotSpec(1,1, subplot_spec=grid_spec[-2, 5:8])
-    ax = fig2_grid_layout.add_subplot(button_next_subplot_spec[0,0])
-    button_back = Button(ax, 'Back', hovercolor='0.975', color='red')
+        count = 0
 
-    # button 2
-    button_reset_subplot_spec = gridspec.GridSpecFromSubplotSpec(1,1, subplot_spec=grid_spec[-2, 9:12])
-    ax = fig2_grid_layout.add_subplot(button_reset_subplot_spec[0,0])
-    button_next = Button(ax, 'Next ', hovercolor='0.975', color='red')
+        for a in top_ :
 
-    # images section 
-    images_subplot_spec = gridspec.GridSpecFromSubplotSpec(1,1, subplot_spec=grid_spec[3:7, :])
-    ax_img = fig2_grid_layout.add_subplot(images_subplot_spec[0,0])
+          if a :
 
-    # text target section
-    target_label_subplot_spec = gridspec.GridSpecFromSubplotSpec(1,1, subplot_spec=grid_spec[8:9, :])
-    ax_ttarget = fig2_grid_layout.add_subplot(target_label_subplot_spec[0,0])
+            count += 1
 
-    # text estimated target section 
-    estimate_label_subplot_spec = gridspec.GridSpecFromSubplotSpec(1,1, subplot_spec=grid_spec[9:10, :])
-    ax_testimated = fig2_grid_layout.add_subplot(estimate_label_subplot_spec[0,0])
+        images = []
 
-    index_obj = [0] 
-    ds_test = images_train_to_dataset_with_label(data_test).take(N_INSTANCES_CLASSIFY_APPLICATION).batch(N_INSTANCES_CLASSIFY_APPLICATION, drop_remainder=True).prefetch(1)
-    x_images_codings_ = None  
-    x_labels_ = None
-    
-    # load/parse dataset
-    for x_images, x_label in ds_test.take(1):
-        x_images_codings_ = x_images 
-        x_labels_ = x_label 
+        indices = []
 
-    button_back.on_clicked(lambda event: button_handler(event, index_obj, ax_img, ax_ttarget, ax_testimated, x_images_codings_, x_labels_, N_INSTANCES_CLASSIFY_APPLICATION, -1))
-    button_next.on_clicked(lambda event: button_handler(event, index_obj, ax_img, ax_ttarget, ax_testimated, x_images_codings_, x_labels_, N_INSTANCES_CLASSIFY_APPLICATION, 1))
-    
-    #initialize clasifier application 
-    load_sample(ax_img,ax_ttarget,ax_testimated, x_images_codings_[index_obj[0]], COARSE_LABELS[x_labels_[0]]  )
+        labels = []
 
-    plt.show()
+        for data in top_:
+
+          if data:
+
+            images.append(data[3])
+
+            labels.append(data[4])
+
+            indices.append( (data[0] * BATCH_SIZE) + data[1] )
+
+        np.save(TOP_IMAGES, images)
+
+        np.save(TOP_INDICES, indices)
+
+        np.save(TOP_LABELS, labels)
+
+        assert(0)
+
+def build_model_ae():
+
+  encoder_input_tensor = tf.keras.layers.Input(shape=(32,32,3), name='IMAGES_IN')
+
+  encoder = Encoder( name='ENCODER_MODULE')
+
+  encoder_output_tensor = encoder(encoder_input_tensor)
+
+  decoder = Decoder(name='DECODER_MODULE')
+
+  decoder_output_tensor = decoder(encoder_output_tensor)
+
+  autoencoder_model = tf.keras.Model(inputs=[encoder_input_tensor], outputs=[decoder_output_tensor])
+
+  print(autoencoder_model.summary())
+
+  return autoencoder_model
+
+def build_model_non_pretrain():
+
+  input_tensor = tf.keras.layers.Input(shape=(32,32,3), name='IMAGES_IN')
+
+  dnn = ClassifierDNN( name='CLASSIFIER_MODULE')
+
+  output_tensor = dnn(input_tensor)
+
+  model = tf.keras.Model(inputs=[input_tensor], outputs=[output_tensor])
+
+  print(model.summary())
+
+  return model
+
+def build_model_pretrain():
+
+  model_ae = build_model_ae()
+
+  model_ae.load_weights(WEIGHTS_FILENAME)
+
+  encoder_ae = model_ae.layers[1]
+
+  decoder_ae = model_ae.layers[2]
+
+  # freeze encoder layer
+
+  counter = 0
+
+  for index , layer in enumerate(encoder_ae.layers):
+
+    if layer.built == True:
+
+      if 'conv2d' in layer.name:
+
+        if counter < 1:
+
+          layer.trainable = False
+
+        else:
+
+          layer.trainable = True
+
+        counter += 1
+
+    print(f' {index} - {layer} {layer.trainable} ' )
+
+  # freeze decoder layer (bottom 3)
+
+  counter = 0
+
+  for index , layer in enumerate(decoder_ae.layers):
+
+    if layer.built == True:
+
+      if 'conv2d' in layer.name:
+
+        if counter < 0:
+
+          layer.trainable = False
+
+        else:
+
+          layer.trainable = True
+
+        counter += 1
+
+    print(f' {index} - {layer} {layer.trainable} ' )
+
+
+  print(model_ae.summary())
+
+  print(encoder_ae.summary())
+
+  print(decoder_ae.summary())
+
+  dnn = ClassifierDNN(enc_layer=encoder_ae, dec_layer=decoder_ae, name='CLASSIFIER_MODULE')
+
+  input_tensor = tf.keras.layers.Input(shape=(32,32,3), name='IMAGES_IN')
+
+  output_tensor = dnn(input_tensor)
+
+  model = tf.keras.Model(inputs=[input_tensor], outputs=[output_tensor])
+
+  print(model.summary())
+
+  return model
+
+def wr_tf_records():
+
+  test_batch = unpickle('data_batch_1')
+
+  test_batch_x = test_batch[b'data']
+
+  test_batch_packed = unpickle('test_batch')
+
+  test_batch_y = test_batch_packed[b'labels']
+
+  test_batch_x = test_batch_packed[b'data']
+
+  d = np.zeros(shape=(50000, 32,32,3))
+
+  l = np.zeros(shape=(50000))
+
+  t = np.zeros(shape=(10000))
+
+  t_label = np.zeros(shape=(10000))
+
+  data = None
+
+  label = None
+
+  with tf.io.TFRecordWriter(CFAR_TRAIN_10) as writer:
+
+    for file_id in range(1, 6):
+
+      batch_packed = unpickle('data_batch_' + str(file_id))
+
+      batch_packed_x = batch_packed[b'data']
+
+      batch_packed_y = batch_packed[b'labels']
+
+      for i in range(10000):
+
+        i = 10000 * (file_id - 1)  + i
+
+        data = serial_to_rbg(batch_packed_x[i % 10000])
+
+        label = batch_packed_y[i % 10000]
+
+        example_train = tf.train.Example(features=tf.train.Features(feature={
+
+          "serial_img": tf.train.Feature( bytes_list=tf.train.BytesList( value = [ tf.io.serialize_tensor(data).numpy() ] )  ),
+
+          "label": tf.train.Feature(int64_list=tf.train.Int64List(value=[  tf.cast( label, tf.int64)  ]))
+
+        }))
+
+        writer.write(example_train.SerializeToString())
+
+
+  with tf.io.TFRecordWriter(CFAR_TEST_10) as writer:
+
+    test_batch_packed = unpickle('test_batch')
+
+    for i in range(10000):
+
+      data = serial_to_rbg (test_batch_packed[b'data'][i])
+
+      label = test_batch_packed[b'labels'][i]
+
+      example_train = tf.train.Example(features=tf.train.Features(feature={
+
+        "serial_img": tf.train.Feature( bytes_list=tf.train.BytesList( value = [ tf.io.serialize_tensor(data).numpy() ] )  ),
+
+        "label": tf.train.Feature(int64_list=tf.train.Int64List(value=[  tf.cast( label, tf.int64)   ]))
+
+      }))
+
+      writer.write(example_train.SerializeToString())
+
+def is_tfrecord_corrupted(tfrecord_file):
+    try:
+        for record in tf.data.TFRecordDataset(tfrecord_file):
+            # Attempt to parse the record
+            _ = tf.train.Example.FromString(record.numpy())
+    except tf.errors.DataLossError as e:
+        print(f"DataLossError encountered: {e}")
+        return True
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return True
+    return False
+
+if CREATE_RECORDS:
+
+  wr_tf_records()
+
+# load dataset
+feature_description = {
+
+  'serial_img': tf.io.FixedLenFeature([], tf.string),
+
+  'label': tf.io.FixedLenFeature([], tf.int64)
+
+}
+
+print(is_tfrecord_corrupted(CFAR_TRAIN_10))
+
+print(is_tfrecord_corrupted(CFAR_TEST_10))
+
+train_dataset = tf.data.TFRecordDataset( CFAR_TRAIN_10 )
+
+train_dataset = train_dataset.map(lambda x: tf.io.parse_single_example(x, feature_description)).map(lambda record: (tf.io.parse_tensor(record['serial_img'], out_type=tf.float64), int(record['label'] )) )
+
+test_dataset = tf.data.TFRecordDataset(CFAR_TEST_10)
+
+test_dataset = test_dataset.map(lambda x: tf.io.parse_single_example(x, feature_description)).map(lambda record: (tf.io.parse_tensor(record['serial_img'], out_type=tf.float64), int(record['label']) ) )
+
+train_dataset = train_dataset.map(lambda x, y: ( tf.reshape(x, (32,32,3)), y[None, ...] )    )
+
+train_dataset_xy = train_dataset
+
+train_dataset_test = train_dataset
+
+test_dataset = test_dataset.map(lambda x, y: ( tf.reshape(x, (32,32,3)), y[None, ...] )    )
+
+train_ae_ds = train_dataset.map(lambda x, y: ( x, x )    )
+
+test_ae_ds = test_dataset.map(lambda x, y: ( x, x )    )
+
+train_dataset = train_dataset.batch(BATCH_SIZE,drop_remainder= True).prefetch(tf.data.experimental.AUTOTUNE)
+
+test_dataset = test_dataset.batch(BATCH_SIZE, drop_remainder= True).prefetch(tf.data.experimental.AUTOTUNE)
+
+train_ae_ds = train_ae_ds.batch(BATCH_SIZE, drop_remainder= True, num_parallel_calls = 2).prefetch(tf.data.experimental.AUTOTUNE)
+
+test_ae_ds = test_ae_ds.batch(BATCH_SIZE, drop_remainder= True).prefetch(tf.data.experimental.AUTOTUNE)
+
+early_stopping_cb = tf.keras.callbacks.EarlyStopping(patience=300, restore_best_weights=True)
+
+tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=LOG_DIR)
+
+lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+      initial_learning_rate=LEARNING_RATE,
+      decay_steps=LEARNING_DECAY_STEPS,
+      decay_rate=LEARNING_DECAY_RATE
+  )
+
+# DIR CREATE
+
+if not os.path.isdir(PREFIX):
+
+  os.mkdir(PREFIX)
+
+# BEST IMAGES
+
+images_ds_best = None
+
+ds_500 = None
+
+if os.path.exists(TOP_IMAGES + '.npy') and os.path.exists(TOP_INDICES + '.npy') :
+
+  images = np.load(TOP_IMAGES + '.npy', allow_pickle=True)
+
+  indices = np.load(TOP_INDICES + '.npy', allow_pickle=True)
+
+  labels = np.load(TOP_LABELS + '.npy', allow_pickle=True)
+
+  images_ds_best = tf.data.Dataset.from_tensor_slices(images)
+
+  indices_ds = tf.data.Dataset.from_tensor_slices(indices)
+
+  labels_ds = tf.data.Dataset.from_tensor_slices(labels)
+
+  count = 0
+
+if images_ds_best:
+
+  ds_500 = tf.data.Dataset.zip(images_ds_best, labels_ds, indices_ds)
+
+if ds_500:
+
+  ds_500 = tf.data.Dataset.zip(images_ds_best, labels_ds)
+
+  ds_500 = ds_500.map(lambda x,y : (x, y[0]))
+
+  ds_500 = ds_500.batch(BATCH_SIZE, drop_remainder=True)
+
+
+# TRAIN IMAGES
+
+if TRAIN_MODE == 0 :
+
+  autoencoder_model = build_model_ae()
+
+  if os.path.exists(WEIGHTS_FILENAME):
+
+    autoencoder_model.load_weights(WEIGHTS_FILENAME)
+
+    autoencoder_model.compile (loss= "huber", optimizer=tf.keras.optimizers.Adam(learning_rate = lr_schedule))
+
+    checkpoint_cb = tf.keras.callbacks.ModelCheckpoint(WEIGHTS_FILENAME, save_best_only=True, save_weights_only=True)
+
+    top_evaluate_cb = Top500ImagesCB(train_dataset_xy.batch(BATCH_SIZE))
+
+    autoencoder_model.fit(
+
+      train_ae_ds,
+
+      epochs=N_EPOCHS,
+
+      validation_data=test_ae_ds,
+
+      callbacks = [
+
+        early_stopping_cb,
+
+        checkpoint_cb,
+
+        # top_evaluate_cb
+      ]
+
+    )
+
+elif TRAIN_MODE == 1:
+
+  model = build_model_non_pretrain()
+
+  if os.path.exists(WEIGHTS_FILENAME_NO_PRETRAIN):
+
+      model.load_weights(WEIGHTS_FILENAME_NO_PRETRAIN )
+
+  model.compile (loss= tf.losses.SparseCategoricalCrossentropy(), optimizer=tf.keras.optimizers.SGD(learning_rate=lr_schedule))
+
+  checkpoint_cb = tf.keras.callbacks.ModelCheckpoint(WEIGHTS_FILENAME_NO_PRETRAIN, save_best_only=True, save_weights_only=True)
+
+  model.fit( train_dataset.unbatch().take(500).repeat(REPEAT).batch(BATCH_SIZE, drop_remainder= True), epochs=N_EPOCHS, validation_data= test_dataset.unbatch().take(500).batch(BATCH_SIZE, drop_remainder= True), callbacks = [early_stopping_cb, checkpoint_cb] )
+
+elif TRAIN_MODE == 2:
+
+  model = build_model_pretrain()
+
+  if os.path.exists(WEIGHTS_FILENAME_PRETRAIN):
+
+    model.load_weights(WEIGHTS_FILENAME_PRETRAIN )
+
+  model.compile (loss= tf.losses.SparseCategoricalCrossentropy(), optimizer=tf.keras.optimizers.RMSprop(learning_rate=lr_schedule))
+
+  checkpoint_cb = tf.keras.callbacks.ModelCheckpoint(WEIGHTS_FILENAME_PRETRAIN, save_best_only=True, save_weights_only=True)
+
+  model.fit( ds_500.unbatch().repeat(REPEAT).shuffle(REPEAT* 500).batch(BATCH_SIZE, drop_remainder= True).prefetch(tf.data.AUTOTUNE) , epochs=N_EPOCHS,
+
+              validation_data= test_dataset.unbatch().take(2000).map(lambda x,y: (x, y[0]) ).batch(BATCH_SIZE, drop_remainder= True), callbacks = [early_stopping_cb, checkpoint_cb])
+
+
