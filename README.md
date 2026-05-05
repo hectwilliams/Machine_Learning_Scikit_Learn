@@ -21,8 +21,8 @@
 |  14   | Computer Vision Using Convolutional Neural Network  *  |
 |  15   | Processing Sequences using RNN and CNN  *   |
 |  16   | Natural Language Processing  * |
-|  17   | Generative Learning w/ Autoencoders|
-|  18   | Reinforcement Learning|
+|  17   | Generative Learning w/ Autoencoders *|
+|  18   | Reinforcement Learning *|
 |  19   | Training and Deploying Tensorflow|
 
   \* - updated recently
